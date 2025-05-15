@@ -1,0 +1,172 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "moleculerpy"
+version = "0.14.2"
+description = "Fast, modern microservices framework for Python - Port of Moleculer.js"
+authors = [
+    { name = "Eli Rum", email = "explosivebit@gmail.com" }
+]
+maintainers = [
+    { name = "MoleculerPy Team" }
+]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.12"
+keywords = ["moleculer", "microservices", "framework", "async", "distributed", "services"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "nats-py>=2.10.0",
+    "structlog>=25.3.0",
+    "psutil>=7.0.0"
+]
+
+[project.urls]
+Homepage = "https://moleculerpy.services"
+Documentation = "https://moleculerpy.services/docs"
+Repository = "https://github.com/MoleculerPy/moleculerpy"
+Issues = "https://github.com/MoleculerPy/moleculerpy/issues"
+Changelog = "https://github.com/MoleculerPy/moleculerpy/blob/main/CHANGELOG.md"
+
+[project.scripts]
+moleculerpy = "moleculerpy.cli:main"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.26.0",
+    "hypothesis>=6.100.0"
+]
+
+dev = [
+    "ruff>=0.1.9",
+    "mypy>=1.5.1",
+    "pre-commit>=3.5.0",
+    "cryptography>=46.0.0",
+    "watchdog>=6.0.0",
+]
+
+# Observability middlewares
+metrics = [
+    "prometheus-client>=0.20.0"
+]
+
+tracing = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp>=1.20.0"
+]
+
+# Alternative transporters
+redis = [
+    "redis>=5.0.0"
+]
+
+# Optional middlewares
+encryption = [
+    "cryptography>=46.0.0"
+]
+
+hotreload = [
+    "watchdog>=6.0.0"
+]
+
+# All optional features
+all = [
+    "prometheus-client>=0.20.0",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp>=1.20.0",
+    "redis>=5.0.0",
+    "cryptography>=46.0.0",
+    "watchdog>=6.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["moleculerpy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+addopts = "-ra -q"
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
+python_classes = ["Test*", "!TestService", "!TestMiddleware"]
+markers = [
+    "unit: marks tests as unit tests (deselect with '-m \"not unit\"')",
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "e2e: marks tests as end-to-end tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "N", "UP", "ANN", "PL", "RUF"]
+ignore = [
+    "ANN401",
+    "E501",
+    "B006",
+    "B008",
+    "PLR0913",
+    "PLR0912",
+    "PLR0915",
+    "PLR0911",
+    "ANN202",
+]
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["moleculerpy"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*.py" = [
+    "ANN",
+    "PLR2004",
+    "E402",
+    "PLC0415",
+    "RUF012",
+    "RUF059",
+    "F401",
+    "B017",
+    "N802",
+    "N806",
+    "N801",
+    "B023",
+    "PLW0603",
+]
+"examples/**/*.py" = ["E402", "ANN", "N806", "F841", "PLR0915"]
+"moleculerpy/**/*.py" = ["ANN204", "ANN001", "ANN201", "ANN101", "N803"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["cryptography.*", "watchdog.*", "nats.*", "redis.*", "prometheus_client.*", "opentelemetry.*", "psutil.*"]
+ignore_missing_imports = true
