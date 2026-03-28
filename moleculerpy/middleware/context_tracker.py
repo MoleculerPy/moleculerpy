@@ -306,7 +306,7 @@ class ContextTrackerMiddleware(Middleware):
         self._broker = broker
         tracked: list[Context] = []
         self._broker_contexts[broker] = tracked
-        broker._tracked_contexts = tracked  # type: ignore[attr-defined]
+        setattr(broker, "_tracked_contexts", tracked)
         self.logger.debug("Broker context tracking initialized")
 
     def service_starting(self, service: Service) -> None:

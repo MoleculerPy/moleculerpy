@@ -41,14 +41,14 @@ PACKAGES = [
         name="moleculerpy-channels",
         path=ROOT / "moleculerpy-channels",
         import_name="moleculerpy_channels",
-        version_expr="'ok'",
+        version_expr="moleculerpy_channels.__version__",
         local_dependencies=("moleculerpy",),
     ),
     PackageCheck(
         name="moleculerpy-repl",
         path=ROOT / "moleculerpy-repl",
         import_name="moleculerpy_repl",
-        version_expr="'ok'",
+        version_expr="moleculerpy_repl.__version__",
         local_dependencies=("moleculerpy",),
     ),
 ]

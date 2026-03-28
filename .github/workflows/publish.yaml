@@ -59,6 +59,7 @@ jobs:
           path: dist/*
 
   publish:
+    if: github.ref_type == 'tag' && github.event.base_ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:

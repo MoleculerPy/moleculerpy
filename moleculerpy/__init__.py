@@ -7,6 +7,8 @@ Website: https://moleculerpy.services
 Documentation: https://moleculerpy.services/docs
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .broker import Broker, ServiceBroker
 from .context import Context
 from .decorators import action, event
@@ -47,7 +49,10 @@ from .tracing import (
     TracerOptions,
 )
 
-__version__ = "0.14.1"
+try:
+    __version__ = version("moleculerpy")
+except PackageNotFoundError:
+    __version__ = "0.14.2"
 
 __all__ = [  # noqa: RUF022
     # Core
