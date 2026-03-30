@@ -504,13 +504,16 @@ class Transit:
             return
 
         endpoint = self.registry.get_event(event_name)
-        if endpoint and endpoint.is_local and endpoint.handler:
+        if endpoint and endpoint.is_local and (endpoint.wrapped_handler or endpoint.handler):
             context = self.lifecycle.rebuild_context(packet.payload)
             success = True
             error_msg: str | None = None
 
             try:
-                await endpoint.handler(context)
+                # Use middleware-wrapped handler if available, matching
+                # the pattern used in broker._emit_core() and broker._broadcast_core().
+                handler = endpoint.wrapped_handler or endpoint.handler
+                await handler(context)
             except Exception as e:
                 success = False
                 error_msg = str(e)
@@ -601,11 +604,15 @@ class Transit:
                 except ValidationError:
                     raise  # Re-raise validation errors
 
-            # Execute the action handler
-            if not endpoint.handler:
+            # Execute the action handler (use middleware-wrapped handler if available)
+            # This ensures local middleware (timeout, bulkhead, context tracking,
+            # caching, etc.) is applied to remotely-originated requests, matching
+            # the pattern used in broker.call() for local actions.
+            handler = endpoint.wrapped_handler or endpoint.handler
+            if not handler:
                 raise Exception(f"No handler defined for action {action_name}")
 
-            result = await endpoint.handler(context)
+            result = await handler(context)
             response = {"id": context.id, "data": result, "success": True, "meta": context.meta}
 
         except Exception as e:

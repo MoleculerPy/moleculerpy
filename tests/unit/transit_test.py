@@ -323,6 +323,7 @@ class TestTransit:
             # Setup mock event endpoint
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock()
             mock_endpoint.name = "test.event"
             transit.registry.get_event.return_value = mock_endpoint
@@ -340,6 +341,28 @@ class TestTransit:
             mock_endpoint.handler.assert_called_once_with(mock_context)
 
     @pytest.mark.asyncio
+    async def test_handle_event_uses_wrapped_handler(self, mock_dependencies, mock_transporter):
+        """Test that _handle_event prefers wrapped_handler over raw handler."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            mock_endpoint = MagicMock()
+            mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = AsyncMock()
+            mock_endpoint.handler = AsyncMock()
+            mock_endpoint.name = "test.event"
+            transit.registry.get_event.return_value = mock_endpoint
+
+            mock_context = MagicMock()
+            transit.lifecycle.rebuild_context.return_value = mock_context
+
+            packet = Packet(Topic.EVENT, "other-node", {"event": "test.event", "data": "test"})
+            await transit._handle_event(packet)
+
+            mock_endpoint.wrapped_handler.assert_called_once_with(mock_context)
+            mock_endpoint.handler.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_handle_request_success(self, mock_dependencies, mock_transporter):
         """Test Transit _handle_request method with successful execution."""
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
@@ -348,6 +371,7 @@ class TestTransit:
             # Setup mock action endpoint
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(return_value={"result": "success"})
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -379,6 +403,7 @@ class TestTransit:
             # Setup mock action endpoint that raises error
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(side_effect=ValueError("Test error"))
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -401,6 +426,38 @@ class TestTransit:
             assert "error" in response_packet.payload
             assert response_packet.payload["error"]["name"] == "ValueError"
             assert response_packet.payload["error"]["message"] == "Test error"
+
+    @pytest.mark.asyncio
+    async def test_handle_request_uses_wrapped_handler(self, mock_dependencies, mock_transporter):
+        """Test that _handle_request prefers wrapped_handler over raw handler."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            mock_endpoint = MagicMock()
+            mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = AsyncMock(return_value={"result": "wrapped"})
+            mock_endpoint.handler = AsyncMock(return_value={"result": "raw"})
+            mock_endpoint.name = "test.action"
+            mock_endpoint.params_schema = None
+            transit.registry.get_action.return_value = mock_endpoint
+
+            mock_context = MagicMock()
+            mock_context.id = "req-123"
+            mock_context.params = {}
+            transit.lifecycle.rebuild_context.return_value = mock_context
+
+            packet = Packet(Topic.REQUEST, "other-node", {"action": "test.action", "id": "req-123"})
+            packet.sender = "other-node"
+            await transit._handle_request(packet)
+
+            mock_endpoint.wrapped_handler.assert_called_once_with(mock_context)
+            mock_endpoint.handler.assert_not_called()
+
+            # Verify wrapped_handler result was used in response
+            mock_transporter.publish.assert_called_once()
+            response_packet = mock_transporter.publish.call_args[0][0]
+            assert response_packet.payload["success"] is True
+            assert response_packet.payload["data"] == {"result": "wrapped"}
 
     @pytest.mark.asyncio
     async def test_handle_response(self, mock_dependencies, mock_transporter):
@@ -767,6 +824,7 @@ class TestTransit:
             # Setup mock action endpoint
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(return_value={"result": "success"})
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -816,6 +874,7 @@ class TestTransit:
             # Setup mock action endpoint that raises error
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(side_effect=ValueError("Test error"))
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -863,6 +922,7 @@ class TestTransit:
             # Setup mock action endpoint
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(return_value={"result": "success"})
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -896,6 +956,7 @@ class TestTransit:
             # Setup mock action endpoint
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(return_value={"result": "success"})
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
