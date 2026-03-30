@@ -1399,6 +1399,7 @@ class TestTransitP0SafetyFixes:
                 async def receive(cmd, data, meta):
                     order.append("A")
                     return await next_receive(cmd, data, meta)
+
                 return receive
 
         class MW_B(Middleware):
@@ -1406,6 +1407,7 @@ class TestTransitP0SafetyFixes:
                 async def receive(cmd, data, meta):
                     order.append("B")
                     return await next_receive(cmd, data, meta)
+
                 return receive
 
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
@@ -1550,9 +1552,7 @@ class TestTransitP0SafetyFixes:
             mock_dependencies["node_id"] = "my-node"
             transit = Transit(**mock_dependencies)
 
-            packet = Packet(
-                Topic.INFO, "my-node", {"id": "my-node", "services": []}
-            )
+            packet = Packet(Topic.INFO, "my-node", {"id": "my-node", "services": []})
             packet.sender = "my-node"
             await transit._message_handler(packet)
 
@@ -1571,9 +1571,7 @@ class TestTransitP0SafetyFixes:
 
             # Send 3 conflict packets (REQUEST is not in _SELF_ECHO_TOPICS)
             for _ in range(3):
-                packet = Packet(
-                    Topic.REQUEST, "my-node", {"action": "test", "ver": "4"}
-                )
+                packet = Packet(Topic.REQUEST, "my-node", {"action": "test", "ver": "4"})
                 packet.sender = "my-node"
                 await transit._message_handler(packet)
 

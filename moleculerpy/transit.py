@@ -238,7 +238,9 @@ class Transit:
                 if str(ver) != PROTOCOL_VERSION:
                     self.logger.warning(
                         "Protocol version mismatch: expected %r, got %r from %s. Packet dropped.",
-                        PROTOCOL_VERSION, ver, packet.sender,
+                        PROTOCOL_VERSION,
+                        ver,
+                        packet.sender,
                     )
                     return
 
@@ -555,7 +557,9 @@ class Transit:
                 # the pattern used in broker._emit_core() and broker._broadcast_core().
                 handler = endpoint.wrapped_handler or endpoint.handler
                 if handler is None:
-                    self.logger.error("No handler for event %s despite endpoint check", endpoint.name)
+                    self.logger.error(
+                        "No handler for event %s despite endpoint check", endpoint.name
+                    )
                     return
                 await handler(context)
             except Exception as e:
