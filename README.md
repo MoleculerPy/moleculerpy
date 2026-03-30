@@ -164,7 +164,7 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 
 # Roadmap
 
-## Current status (v0.14.1)
+## Current status (v0.14.3)
 - Core framework with full service lifecycle
 - NATS, Redis, Memory transporters
 - 19 built-in middlewares

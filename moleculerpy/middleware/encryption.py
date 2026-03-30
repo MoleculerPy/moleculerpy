@@ -142,8 +142,8 @@ class EncryptionMiddleware(Middleware):
 
         # Prepend IV if using random IV
         if prepend_iv:
-            return iv + encrypted
-        return encrypted
+            return bytes(iv + encrypted)
+        return bytes(encrypted)
 
     def _decrypt(self, data: bytes) -> bytes:
         """Decrypt data using AES-CBC.
@@ -176,7 +176,7 @@ class EncryptionMiddleware(Middleware):
 
         # Unpad
         unpadder = padding.PKCS7(128).unpadder()
-        return unpadder.update(padded_data) + unpadder.finalize()
+        return bytes(unpadder.update(padded_data) + unpadder.finalize())
 
     def broker_created(self, broker: Any) -> None:
         """Log encryption settings when broker is created.
