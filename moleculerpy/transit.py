@@ -12,18 +12,20 @@ Internal events emitted (Moleculer.js compatible):
 import asyncio
 import time
 import traceback
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from .metrics import MetricsCollector, get_static_metrics
 
 if TYPE_CHECKING:
+    from .broker import ServiceBroker
     from .context import Context
     from .lifecycle import Lifecycle
     from .node import NodeCatalog
     from .registry import Action, Event, Registry
     from .settings import Settings
 
-from .errors import MoleculerError, RemoteCallError
+from .errors import MoleculerError, RemoteCallError, ServiceNotFoundError
 from .packet import Packet, Topic
 from .stream import AsyncStream, PendingStream, StreamChunk, StreamMetadata, StreamState
 from .transporter.base import Transporter
@@ -31,6 +33,12 @@ from .validator import ValidationError, validate_params
 
 # Default timeout for event acknowledgments (seconds)
 DEFAULT_ACK_TIMEOUT: float = 5.0
+
+# Protocol version this node speaks (Moleculer v4)
+PROTOCOL_VERSION: str = "4"
+
+# Broadcast topics where a node legitimately receives its own packets
+_SELF_ECHO_TOPICS: frozenset[Topic] = frozenset({Topic.DISCOVER, Topic.HEARTBEAT, Topic.INFO})
 
 
 class Transit:
@@ -114,10 +122,13 @@ class Transit:
         self._was_connected: bool = False
 
         # Broker reference for middleware wrapping (set by broker after creation)
-        self._broker: Any = None
+        self._broker: ServiceBroker | None = None
 
         # Wrapped publish method (set by _wrap_methods)
-        self._wrapped_publish: Any = None
+        self._wrapped_publish: Callable[[Packet], Awaitable[None]] | None = None
+
+        # Guard against repeated broker.stop() on NodeID conflict
+        self._shutting_down: bool = False
 
     def _emit_transporter_event(self, event: str, payload: dict[str, Any]) -> None:
         """Emit a transporter internal event via broker (fire-and-forget).
@@ -200,9 +211,10 @@ class Transit:
             await self.transporter.receive(cmd, data, meta)
 
         current_receive = receive_impl
-        # Normal order (not reversed) because the hook itself is for "receive"
-        # and middleware is applied in the order: decompression before decryption
-        for middleware in broker.middlewares:
+        # Reversed order — symmetric with transporter_send. The last middleware
+        # to wrap send (outermost) should be the first to unwrap on receive.
+        # E.g. send: compress → encrypt → wire; receive: wire → decrypt → decompress.
+        for middleware in reversed(broker.middlewares):
             hook = getattr(middleware, "transporter_receive", None)
             if hook is not None and callable(hook):
                 if type(middleware).transporter_receive is not Middleware.transporter_receive:
@@ -219,6 +231,35 @@ class Transit:
         Args:
             packet: Incoming packet to process
         """
+        # Protocol version check — reject packets from incompatible nodes.
+        if packet.payload is not None:
+            ver = packet.payload.get("ver")
+            if ver is not None:
+                if str(ver) != PROTOCOL_VERSION:
+                    self.logger.warning(
+                        "Protocol version mismatch: expected %r, got %r from %s. Packet dropped.",
+                        PROTOCOL_VERSION, ver, packet.sender,
+                    )
+                    return
+
+        # NodeID conflict detection — fatal if a remote node shares our ID.
+        if packet.sender == self.node_id and packet.type not in _SELF_ECHO_TOPICS:
+            self.logger.critical(
+                "NodeID conflict detected! Remote node has the same ID %r. "
+                "Shutting down to prevent data corruption.",
+                self.node_id,
+            )
+            if self._broker and not self._shutting_down:
+                self._shutting_down = True
+                task = asyncio.create_task(self._broker.stop())
+
+                def _log_stop_error(t: asyncio.Task[None]) -> None:
+                    if not t.cancelled() and (exc := t.exception()):
+                        self.logger.error("broker.stop() failed after NodeID conflict: %s", exc)
+
+                task.add_done_callback(_log_stop_error)
+            return
+
         handler = self._packet_handlers.get(packet.type)
         if handler:
             try:
@@ -504,13 +545,19 @@ class Transit:
             return
 
         endpoint = self.registry.get_event(event_name)
-        if endpoint and endpoint.is_local and endpoint.handler:
+        if endpoint and endpoint.is_local and (endpoint.wrapped_handler or endpoint.handler):
             context = self.lifecycle.rebuild_context(packet.payload)
             success = True
             error_msg: str | None = None
 
             try:
-                await endpoint.handler(context)
+                # Use middleware-wrapped handler if available, matching
+                # the pattern used in broker._emit_core() and broker._broadcast_core().
+                handler = endpoint.wrapped_handler or endpoint.handler
+                if handler is None:
+                    self.logger.error("No handler for event %s despite endpoint check", endpoint.name)
+                    return
+                await handler(context)
             except Exception as e:
                 success = False
                 error_msg = str(e)
@@ -601,11 +648,15 @@ class Transit:
                 except ValidationError:
                     raise  # Re-raise validation errors
 
-            # Execute the action handler
-            if not endpoint.handler:
-                raise Exception(f"No handler defined for action {action_name}")
+            # Execute the action handler (use middleware-wrapped handler if available).
+            # This ensures local middleware (timeout, bulkhead, context tracking,
+            # caching, etc.) is applied to remotely-originated requests, matching
+            # the pattern used in broker.call() for local actions.
+            handler = endpoint.wrapped_handler or endpoint.handler
+            if not handler:
+                raise ServiceNotFoundError(action_name, node_id=self.node_id)
 
-            result = await endpoint.handler(context)
+            result = await handler(context)
             response = {"id": context.id, "data": result, "success": True, "meta": context.meta}
 
         except Exception as e:

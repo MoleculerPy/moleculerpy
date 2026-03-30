@@ -274,6 +274,7 @@ class TestTransitEventAckHandling:
             # Mock event endpoint
             mock_endpoint = Mock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock()
             mock_endpoint.name = "test.event"
             mock_dependencies["registry"].get_event = Mock(return_value=mock_endpoint)
@@ -314,6 +315,7 @@ class TestTransitEventAckHandling:
             # Mock event endpoint that raises exception
             mock_endpoint = Mock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(side_effect=ValueError("Handler failed"))
             mock_endpoint.name = "test.event"
             mock_dependencies["registry"].get_event = Mock(return_value=mock_endpoint)
@@ -347,6 +349,7 @@ class TestTransitEventAckHandling:
 
             mock_endpoint = Mock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock()
             mock_endpoint.name = "test.event"
             mock_dependencies["registry"].get_event = Mock(return_value=mock_endpoint)
