@@ -1,7 +1,7 @@
 # MoleculerPy Performance Benchmarks
 
 **Date**: 2026-01-30
-**Version**: 0.14.1
+**Version**: 0.14.3
 **Platform**: macOS (Darwin 25.1.0), Python 3.12.7
 **Test Suite**: `tests/stress/test_extreme_load.py`
 
