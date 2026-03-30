@@ -7,7 +7,6 @@ Requires: redis>=5.0.0 (install with `pip install moleculerpy[redis]`)
 """
 
 import asyncio
-import json
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -18,9 +17,11 @@ if TYPE_CHECKING:
 from ..packet import Packet
 from .base import Transporter
 
+# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
+PROTOCOL_VERSION: str = "4"
+
 logger = logging.getLogger(__name__)
 DISCONNECT_TIMEOUT_SECONDS = 5.0
-JSON_THREAD_OFFLOAD_THRESHOLD = 1024 * 1024
 
 
 class RedisConnectionError(RuntimeError):
@@ -85,21 +86,6 @@ class RedisTransporter(Transporter):
 
         # Shutdown flag
         self._shutting_down = False
-
-    def _serialize(self, payload: dict[str, Any]) -> bytes:
-        """Serialize a payload for transmission over Redis.
-
-        Args:
-            payload: Dictionary payload to serialize
-
-        Returns:
-            Serialized payload as bytes
-        """
-        # Add protocol version and sender information (Moleculer v4 compatible)
-        payload_copy = {**payload}
-        payload_copy["ver"] = "4"
-        payload_copy["sender"] = self.node_id
-        return json.dumps(payload_copy).encode("utf-8")
 
     def get_topic_name(self, command: str, node_id: str | None = None) -> str:
         """Generate a Redis channel name for a command.
@@ -193,11 +179,8 @@ class RedisTransporter(Transporter):
             meta: Metadata containing packet_type, channel, etc.
         """
         try:
-            if len(data) > JSON_THREAD_OFFLOAD_THRESHOLD:
-                payload = await asyncio.to_thread(lambda: json.loads(data.decode("utf-8")))
-            else:
-                payload = json.loads(data.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            payload = await self.transit.serializer.deserialize_async(data)
+        except Exception as e:
             raise ValueError(f"Failed to decode message data: {e}") from e
 
         packet_type = meta.get("packet_type")
@@ -228,7 +211,8 @@ class RedisTransporter(Transporter):
             raise RuntimeError("Not connected to Redis server")
 
         topic = self.get_topic_name(packet.type.value, packet.target)
-        serialized_payload = self._serialize(packet.payload)
+        payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
+        serialized_payload = await self.transit.serializer.serialize_async(payload)
 
         # Send through middleware chain
         meta = {"packet": packet}

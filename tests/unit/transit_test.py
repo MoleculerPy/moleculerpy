@@ -15,6 +15,7 @@ def mock_dependencies():
     mock_settings = MagicMock(transporter="nats://localhost:4222")
     # Ensure request_timeout is a float, not MagicMock
     mock_settings.request_timeout = 30.0
+    mock_settings.serializer = "JSON"
     return {
         "node_id": "test-node-123",
         "registry": MagicMock(),
@@ -1245,6 +1246,7 @@ class TestTransitP0SafetyFixes:
     def mock_dependencies(self):
         mock_settings = MagicMock(transporter="nats://localhost:4222")
         mock_settings.request_timeout = 30.0
+        mock_settings.serializer = "JSON"
         return {
             "node_id": "test-node-p0",
             "settings": mock_settings,

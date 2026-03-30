@@ -57,6 +57,7 @@ dev = [
     "pre-commit>=3.5.0",
     "cryptography>=46.0.0",
     "watchdog>=6.0.0",
+    "msgpack>=1.0.0",
 ]
 
 # Observability middlewares
@@ -80,6 +81,10 @@ encryption = [
     "cryptography>=46.0.0"
 ]
 
+msgpack = [
+    "msgpack>=1.0.0",
+]
+
 hotreload = [
     "watchdog>=6.0.0"
 ]
@@ -93,6 +98,7 @@ all = [
     "redis>=5.0.0",
     "cryptography>=46.0.0",
     "watchdog>=6.0.0",
+    "msgpack>=1.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -168,5 +174,5 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["cryptography.*", "watchdog.*", "nats.*", "redis.*", "prometheus_client.*", "opentelemetry.*", "psutil.*"]
+module = ["cryptography.*", "watchdog.*", "nats.*", "redis.*", "prometheus_client.*", "opentelemetry.*", "psutil.*", "msgpack.*"]
 ignore_missing_imports = true

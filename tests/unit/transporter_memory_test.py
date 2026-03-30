@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from moleculerpy.packet import Packet, Topic
+from moleculerpy.serializers import JsonSerializer
 from moleculerpy.transporter.memory import (
     MemoryTransporter,
     _MemoryBus,
@@ -31,6 +32,7 @@ def mock_transit():
     transit = Mock()
     transit.broker = Mock()
     transit.broker.nodeID = "test-node"
+    transit.serializer = JsonSerializer()
     return transit
 
 
@@ -294,15 +296,11 @@ class TestMemoryTransporter:
 
     @pytest.mark.asyncio
     async def test_serialize_adds_version_and_sender(self, mock_transit) -> None:
-        """Serialization should add ver and sender fields."""
-        transporter = MemoryTransporter(
-            transit=mock_transit,
-            node_id="test-node",
-        )
-
-        payload = {"action": "math.add"}
-        serialized = transporter._serialize(payload)
-        deserialized = transporter._deserialize(serialized)
+        """Serialization via transit.serializer should produce valid bytes."""
+        serializer = mock_transit.serializer
+        payload = {**{"action": "math.add"}, "ver": "4", "sender": "test-node"}
+        serialized = serializer.serialize(payload)
+        deserialized = serializer.deserialize(serialized)
 
         assert deserialized["ver"] == "4"
         assert deserialized["sender"] == "test-node"
@@ -311,23 +309,21 @@ class TestMemoryTransporter:
     @pytest.mark.asyncio
     async def test_deserialize_async_offloads_large_json(self, mock_transit) -> None:
         """Large payloads should deserialize via asyncio.to_thread."""
-        transporter = MemoryTransporter(
-            transit=mock_transit,
-            node_id="test-node",
-        )
-        serialized = transporter._serialize({"blob": "x" * (1024 * 1024)})
+        serializer = mock_transit.serializer
+        payload = {**{"blob": "x" * (1024 * 1024)}, "ver": "4", "sender": "test-node"}
+        serialized = serializer.serialize(payload)
         called = {"value": False}
 
-        async def fake_to_thread(func):
+        async def fake_to_thread(func, *args):
             called["value"] = True
-            return func()
+            return func(*args)
 
         with pytest.MonkeyPatch.context() as monkeypatch:
-            monkeypatch.setattr("moleculerpy.transporter.memory.asyncio.to_thread", fake_to_thread)
-            payload = await transporter._deserialize_async(serialized)
+            monkeypatch.setattr("moleculerpy.serializers.base.asyncio.to_thread", fake_to_thread)
+            result = await serializer.deserialize_async(serialized)
 
         assert called["value"] is True
-        assert payload["sender"] == "test-node"
+        assert result["sender"] == "test-node"
 
     @pytest.mark.asyncio
     async def test_message_handler_ignores_own_messages(self, mock_transit, mock_handler) -> None:
@@ -338,8 +334,9 @@ class TestMemoryTransporter:
             node_id="node-1",
         )
 
-        # Simulate receiving own message
-        data = transporter._serialize({"action": "test"})
+        # Simulate receiving own message using the serializer
+        serializer = mock_transit.serializer
+        data = serializer.serialize({"action": "test", "ver": "4", "sender": "node-1"})
         await transporter._message_handler("MOL.REQ.node-1", data)
 
         # Handler should not be called

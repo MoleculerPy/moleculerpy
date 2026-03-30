@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 from .errors import MoleculerError, RemoteCallError, ServiceNotFoundError
 from .packet import Packet, Topic
+from .serializers import BaseSerializer, resolve_serializer
 from .stream import AsyncStream, PendingStream, StreamChunk, StreamMetadata, StreamState
 from .transporter.base import Transporter
 from .validator import ValidationError, validate_params
@@ -77,6 +78,9 @@ class Transit:
         self.settings = settings
         self.logger = logger
         self.lifecycle = lifecycle
+
+        # Initialize serializer based on settings
+        self.serializer: BaseSerializer = resolve_serializer(settings.serializer)
 
         # Initialize transporter based on settings
         transporter_name = settings.transporter.split("://")[0]

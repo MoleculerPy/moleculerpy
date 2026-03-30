@@ -19,16 +19,17 @@ Usage:
 """
 
 import asyncio
-import json
 import logging
 import weakref
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from .base import Transporter
 
 logger = logging.getLogger(__name__)
-JSON_THREAD_OFFLOAD_THRESHOLD = 1024 * 1024
+
+# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
+_PROTOCOL_VERSION: str = "4"
 
 if TYPE_CHECKING:
     from ..packet import Packet
@@ -250,42 +251,6 @@ class MemoryTransporter(Transporter):
         # Built-in balancer means no external balancer needed
         self.has_built_in_balancer = True
 
-    def _serialize(self, payload: dict[str, Any]) -> bytes:
-        """Serialize a payload for transmission.
-
-        Adds protocol version and sender information.
-        Note: Creates a copy to avoid mutating the original payload.
-
-        Args:
-            payload: Dictionary payload to serialize
-
-        Returns:
-            Serialized payload as bytes
-        """
-        # Create copy to avoid mutating original
-        data = {**payload, "ver": "4", "sender": self.node_id}
-        return json.dumps(data).encode("utf-8")
-
-    def _deserialize(self, data: bytes) -> dict[str, Any]:
-        """Deserialize received data.
-
-        Args:
-            data: Serialized message data
-
-        Returns:
-            Deserialized payload dictionary
-        """
-        return cast(dict[str, Any], json.loads(data.decode("utf-8")))
-
-    async def _deserialize_async(self, data: bytes) -> dict[str, Any]:
-        """Deserialize data with optional thread offload for large payloads."""
-        if len(data) > JSON_THREAD_OFFLOAD_THRESHOLD:
-            return cast(
-                dict[str, Any],
-                await asyncio.to_thread(lambda: json.loads(data.decode("utf-8"))),
-            )
-        return self._deserialize(data)
-
     def get_topic_name(self, command: str, node_id: str | None = None) -> str:
         """Generate a topic name for a command.
 
@@ -316,7 +281,7 @@ class MemoryTransporter(Transporter):
         try:
             # Check if it's our own message (peek at sender without full deserialize)
             # This is an optimization to avoid processing our own broadcasts
-            payload_peek = await self._deserialize_async(data)
+            payload_peek = await self.transit.serializer.deserialize_async(data)
             if payload_peek.get("sender") == self.node_id:
                 return
 
@@ -352,7 +317,7 @@ class MemoryTransporter(Transporter):
         from ..packet import Packet  # noqa: PLC0415
 
         try:
-            payload = await self._deserialize_async(data)
+            payload = await self.transit.serializer.deserialize_async(data)
         except Exception as e:
             logger.exception("Failed to deserialize message: %s", e)
             return
@@ -402,7 +367,8 @@ class MemoryTransporter(Transporter):
             raise RuntimeError("Memory transporter is not connected")
 
         topic = self.get_topic_name(packet.type.value, packet.target)
-        serialized = self._serialize(packet.payload)
+        payload = {**packet.payload, "ver": _PROTOCOL_VERSION, "sender": self.node_id}
+        serialized = await self.transit.serializer.serialize_async(payload)
 
         # Send through middleware chain
         meta = {"packet": packet}
