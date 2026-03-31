@@ -230,8 +230,51 @@ class Transit:
         self.transporter._wrapped_receive = current_receive
         self.logger.debug("Transporter receive wrapped with middleware hooks")
 
+        # =================================================================
+        # 4. Wrap transit._message_handler with transitMessageHandler hooks
+        # =================================================================
+        async def message_handler_impl(packet: Packet) -> None:
+            await self._message_handler_core(packet)
+
+        current_handler = message_handler_impl
+        for middleware in reversed(broker.middlewares):
+            hook = getattr(middleware, "transit_message_handler", None)
+            if hook is not None and callable(hook):
+                if (
+                    type(middleware).transit_message_handler
+                    is not Middleware.transit_message_handler
+                ):
+                    outer_handler = current_handler
+                    mw = middleware
+
+                    async def wrapped_handler(
+                        packet: Packet,
+                        _next: Any = outer_handler,
+                        _mw: Any = mw,
+                    ) -> None:
+                        await _mw.transit_message_handler(_next, packet)
+
+                    current_handler = wrapped_handler
+
+        self._wrapped_message_handler = current_handler
+        self.logger.debug("Transit message handler wrapped with middleware hooks")
+
     async def _message_handler(self, packet: Packet) -> None:
+        """Handle incoming packets — routes through middleware chain first.
+
+        Args:
+            packet: Incoming packet to process
+        """
+        if hasattr(self, "_wrapped_message_handler"):
+            await self._wrapped_message_handler(packet)
+        else:
+            await self._message_handler_core(packet)
+
+    async def _message_handler_core(self, packet: Packet) -> None:
         """Handle incoming packets based on their type.
+
+        Core implementation that performs protocol checks and dispatches
+        to type-specific handlers. Called directly or through middleware chain.
 
         Args:
             packet: Incoming packet to process
