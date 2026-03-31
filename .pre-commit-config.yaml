@@ -1,4 +1,5 @@
 repos:
+  # ── Commit stage: fast checks ──────────────────────────────
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.0
     hooks:
@@ -17,3 +18,23 @@ repos:
       - id: check-case-conflict
       - id: check-added-large-files
         args: ['--maxkb=500']
+
+  # ── Push stage: thorough checks ────────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        args: [--ignore-missing-imports]
+        pass_filenames: false
+        entry: mypy moleculerpy/
+        stages: [pre-push]
+
+  - repo: local
+    hooks:
+      - id: pytest-unit
+        name: pytest unit tests
+        entry: /Users/explosovebit/Work/MoleculerPy/.venv/bin/python -m pytest tests/unit/ --tb=no -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        always_run: true
