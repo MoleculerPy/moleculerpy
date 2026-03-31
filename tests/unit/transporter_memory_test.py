@@ -51,7 +51,7 @@ class TestMemoryBus:
         bus = _MemoryBus()
         received = []
 
-        async def handler(topic: str, data: bytes) -> None:
+        async def handler(topic: str, data: bytes, meta: dict) -> None:
             received.append((topic, data))
 
         await bus.subscribe("test.topic", handler, "sub-1")
@@ -69,10 +69,10 @@ class TestMemoryBus:
         bus = _MemoryBus()
         received = []
 
-        async def handler1(topic: str, data: bytes) -> None:
+        async def handler1(topic: str, data: bytes, meta: dict) -> None:
             received.append(("h1", data))
 
-        async def handler2(topic: str, data: bytes) -> None:
+        async def handler2(topic: str, data: bytes, meta: dict) -> None:
             received.append(("h2", data))
 
         await bus.subscribe("test.topic", handler1, "sub-1")
@@ -91,7 +91,7 @@ class TestMemoryBus:
         bus = _MemoryBus()
         received = []
 
-        async def handler(topic: str, data: bytes) -> None:
+        async def handler(topic: str, data: bytes, meta: dict) -> None:
             received.append(data)
 
         await bus.subscribe("test.topic", handler, "sub-1")
@@ -107,7 +107,7 @@ class TestMemoryBus:
         """Bus should track subscriber count."""
         bus = _MemoryBus()
 
-        async def handler(topic: str, data: bytes) -> None:
+        async def handler(topic: str, data: bytes, meta: dict) -> None:
             pass
 
         assert bus.get_subscriber_count("test.topic") == 0
@@ -134,7 +134,7 @@ class TestMemoryBus:
         bus = _MemoryBus()
         received = []
 
-        async def handler(topic: str, data: bytes) -> None:
+        async def handler(topic: str, data: bytes, meta: dict) -> None:
             received.append(data)
 
         await bus.subscribe("test.topic", handler, "sub-1")
@@ -153,7 +153,7 @@ class TestMemoryBus:
         bus = _MemoryBus()
         completed = []
 
-        async def slow_handler(topic: str, data: bytes) -> None:
+        async def slow_handler(topic: str, data: bytes, meta: dict) -> None:
             await asyncio.sleep(0.1)
             completed.append(data)
 
@@ -178,7 +178,7 @@ class TestMemoryBus:
         bus = _MemoryBus()
         results = []
 
-        async def handler(topic: str, data: bytes) -> None:
+        async def handler(topic: str, data: bytes, meta: dict) -> None:
             await asyncio.sleep(0.05)
             results.append(data)
 
@@ -197,14 +197,14 @@ class TestMemoryBus:
         bus = _MemoryBus()
         states = {"sub1_canceled": False, "sub2_completed": False}
 
-        async def handler_sub1(topic: str, data: bytes) -> None:
+        async def handler_sub1(topic: str, data: bytes, meta: dict) -> None:
             try:
                 await asyncio.sleep(0.2)
             except asyncio.CancelledError:
                 states["sub1_canceled"] = True
                 raise
 
-        async def handler_sub2(topic: str, data: bytes) -> None:
+        async def handler_sub2(topic: str, data: bytes, meta: dict) -> None:
             await asyncio.sleep(0.1)
             states["sub2_completed"] = True
 
@@ -334,10 +334,10 @@ class TestMemoryTransporter:
             node_id="node-1",
         )
 
-        # Simulate receiving own message using the serializer
+        # Simulate receiving own message — meta carries sender for self-echo guard
         serializer = mock_transit.serializer
         data = serializer.serialize({"action": "test", "ver": "4", "sender": "node-1"})
-        await transporter._message_handler("MOL.REQ.node-1", data)
+        await transporter._message_handler("MOL.REQ.node-1", data, {"sender": "node-1"})
 
         # Handler should not be called
         mock_handler.assert_not_called()

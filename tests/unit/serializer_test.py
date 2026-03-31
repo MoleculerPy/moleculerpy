@@ -290,3 +290,59 @@ class TestSerializationError:
     def test_str_representation(self) -> None:
         err = SerializationError("bad data")
         assert "bad data" in str(err)
+
+
+# =============================================================================
+# Additional Audit Tests
+# =============================================================================
+
+
+class TestResolveMsgPackImportError:
+    """Test resolve_serializer raises ImportError for missing msgpack."""
+
+    def test_resolve_msgpack_raises_import_error_when_not_installed(self) -> None:
+        from moleculerpy.serializers import msgpack as msgpack_mod
+
+        original = msgpack_mod.MSGPACK_AVAILABLE
+        try:
+            msgpack_mod.MSGPACK_AVAILABLE = False
+            with pytest.raises(ImportError, match="msgpack package required"):
+                resolve_serializer("MSGPACK")
+        finally:
+            msgpack_mod.MSGPACK_AVAILABLE = original
+
+
+class TestDeserializeEmptyBytes:
+    """Test that deserializing empty bytes raises SerializationError."""
+
+    def test_json_deserialize_empty_bytes_raises(self) -> None:
+        serializer = JsonSerializer()
+        with pytest.raises(SerializationError):
+            serializer.deserialize(b"")
+
+    def test_msgpack_deserialize_empty_bytes_raises(self) -> None:
+        pytest.importorskip("msgpack")
+        serializer = MsgPackSerializer()
+        with pytest.raises(SerializationError):
+            serializer.deserialize(b"")
+
+
+class TestMsgPackNonSerializable:
+    """Test that MsgPack raises on non-serializable types."""
+
+    def test_msgpack_serialize_non_serializable_raises(self) -> None:
+        pytest.importorskip("msgpack")
+        serializer = MsgPackSerializer()
+        with pytest.raises(SerializationError, match="MsgPack serialize failed"):
+            serializer.serialize({"func": lambda: None})  # type: ignore[dict-item]
+
+
+class TestDeserializePayloadTooLarge:
+    """Test that oversized payloads are rejected by deserialize_async."""
+
+    def test_deserialize_payload_too_large_raises(self) -> None:
+        serializer = JsonSerializer()
+        # Create data larger than MAX_PAYLOAD_BYTES
+        oversized = b"x" * (BaseSerializer.MAX_PAYLOAD_BYTES + 1)
+        with pytest.raises(SerializationError, match="Payload too large"):
+            asyncio.run(serializer.deserialize_async(oversized))

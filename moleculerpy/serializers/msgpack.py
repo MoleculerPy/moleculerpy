@@ -50,6 +50,7 @@ class MsgPackSerializer(BaseSerializer):
         Raises:
             SerializationError: If payload contains non-serializable types
         """
+        assert msgpack is not None
         try:
             result: bytes = msgpack.packb(payload, use_bin_type=True)
             return result
@@ -70,8 +71,9 @@ class MsgPackSerializer(BaseSerializer):
         Raises:
             SerializationError: If data is not valid MsgPack or not a dict
         """
+        assert msgpack is not None
         try:
-            result = msgpack.unpackb(data, raw=False)
+            result = msgpack.unpackb(data, raw=False, strict_map_key=True)
             if not isinstance(result, dict):
                 raise SerializationError(
                     f"Expected dict from MsgPack deserialization, got {type(result).__name__}"

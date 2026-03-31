@@ -10,6 +10,8 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
+from ..errors import SerializationError
+
 
 class BaseSerializer(ABC):
     """Base class for all serializers.
@@ -20,6 +22,7 @@ class BaseSerializer(ABC):
     """
 
     THREAD_OFFLOAD_THRESHOLD: ClassVar[int] = 1024 * 1024  # 1MB
+    MAX_PAYLOAD_BYTES: ClassVar[int] = 8 * 1024 * 1024  # 8MB default
 
     @abstractmethod
     def serialize(self, payload: dict[str, Any]) -> bytes:
@@ -76,7 +79,14 @@ class BaseSerializer(ABC):
 
         Returns:
             Deserialized dictionary
+
+        Raises:
+            SerializationError: If payload exceeds MAX_PAYLOAD_BYTES
         """
+        if len(data) > self.MAX_PAYLOAD_BYTES:
+            raise SerializationError(
+                f"Payload too large: {len(data)} bytes exceeds {self.MAX_PAYLOAD_BYTES} byte limit"
+            )
         if len(data) > self.THREAD_OFFLOAD_THRESHOLD:
             return await asyncio.to_thread(self.deserialize, data)
         return self.deserialize(data)

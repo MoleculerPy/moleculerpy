@@ -51,10 +51,10 @@ class JsonSerializer(BaseSerializer):
         """
         try:
             result = json.loads(data.decode("utf-8"))
-            if not isinstance(result, dict):
-                raise SerializationError(
-                    f"Expected dict from JSON deserialization, got {type(result).__name__}"
-                )
-            return result
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError) as e:
             raise SerializationError(f"JSON deserialize failed: {e}") from e
+        if not isinstance(result, dict):
+            raise SerializationError(
+                f"Expected dict from JSON deserialization, got {type(result).__name__}"
+            )
+        return result

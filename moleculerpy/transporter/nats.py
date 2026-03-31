@@ -108,7 +108,8 @@ class NatsTransporter(Transporter):
         try:
             payload = await self.transit.serializer.deserialize_async(data)
         except Exception as e:
-            raise ValueError(f"Failed to decode message data: {e}") from e
+            logger.warning("Failed to decode NATS message, dropping: %r", e)
+            return
 
         packet_type = meta.get("packet_type")
         if packet_type is None:
