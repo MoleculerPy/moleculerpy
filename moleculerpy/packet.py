@@ -67,10 +67,20 @@ class Packet:
         return _topic_from_type(topic_type)
 
 
+# Balanced topic aliases — REQB and EVENTB map to their normal counterparts.
+# NATS delivers balanced messages on MOL.REQB.<action> / MOL.EVENTB.<group>.<event>
+# but the handler processes them identically to normal REQ/EVENT packets.
+_BALANCED_ALIASES: dict[str, str] = {
+    "REQB": "REQ",
+    "EVENTB": "EVENT",
+}
+
+
 @lru_cache(maxsize=32)
 def _topic_from_type(topic_type: str) -> Topic:
     """Resolve topic type token to Topic enum with a tiny cache for hot paths."""
+    resolved = _BALANCED_ALIASES.get(topic_type, topic_type)
     try:
-        return Topic(topic_type)
+        return Topic(resolved)
     except (ValueError, KeyError) as e:
         raise ValueError(f"Unknown topic type: {topic_type}") from e

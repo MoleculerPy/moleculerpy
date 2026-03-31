@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.5] - 2026-03-31
+
+### Added
+- **Balanced Request/Event Handling** (PRD-009)
+  - `Settings(disable_balancer=True)` enables native NATS queue group balancing
+  - Balanced request topics: `MOL.REQB.<action>` with NATS queue groups
+  - Balanced event topics: `MOL.EVENTB.<group>.<event>` with NATS queue groups
+  - `prepublish()` routes ALL outgoing packets — balanced vs normal
+  - `call_without_balancer()` bypasses broker strategy
+  - `make_balanced_subscriptions()` subscribes for all local actions/events
+  - Wire protocol compatible with Node.js Moleculer `disableBalancer: true`
+  - E2E verified: 49/51 distribution on 100 requests across 2 nodes
+- Codecov integration with PR coverage checks
+- `codecov.yml` — project target auto, patch target 80%
+
+### Fixed
+- Balanced topic parsing: `REQB` → `REQUEST`, `EVENTB` → `EVENT` in packet.py
+- Wildcard regex: `re.sub(r"\*\*.*$", ">", event)` matches Node.js behavior
+- Disconnected check in `prepublish` — raises `BrokerDisconnectedError`
+- `call_without_balancer` guard for `transit=None`
+
 ## [0.14.4] - 2026-03-31
 
 ### Added
