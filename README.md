@@ -167,11 +167,12 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 
 # Roadmap
 
-## Current status (v0.14.5)
+## Current status (v0.14.6)
 - Core framework with full service lifecycle
 - NATS, Redis, Memory transporters
 - Pluggable serializers (JSON, MsgPack) — MsgPack 2x faster on large payloads
 - Balanced request/event handling via NATS queue groups (`disable_balancer=True`)
+- 4/4 transit middleware hooks (publish, send, receive, message handler)
 - 22 built-in middlewares
 - 5 load balancing strategies
 - Circuit breaker, bulkhead, retry patterns
@@ -182,7 +183,6 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 - Pre-commit/push hooks (ruff, mypy, pytest) + Codecov integration
 
 ## Planned features
-- Transit middleware hook (transitMessageHandler)
 - REST API Gateway (moleculerpy-web)
 - TCP transporter with Gossip protocol
 - Database adapters (moleculerpy-db)

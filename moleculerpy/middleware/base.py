@@ -322,6 +322,33 @@ class Middleware:
         """
         return await next_publish(packet)
 
+    async def transit_message_handler(
+        self,
+        next_handler: Callable[[Any], Awaitable[None]],
+        packet: Any,
+    ) -> None:
+        """Hook for intercepting transit._message_handler() calls.
+
+        Intercepts packets after deserialization but before type-specific dispatch.
+        Use for: protocol-level auth, rate limiting, audit logging, packet filtering, metrics.
+
+        Note: Node.js Moleculer passes (cmd, packet) to this hook. In Python,
+        use packet.type (Topic enum) to distinguish packet types — this is the
+        equivalent of the Node.js cmd parameter.
+
+        Args:
+            next_handler: The next handler function in the chain
+            packet: The deserialized Packet object (has .type, .sender, .payload)
+
+        Example:
+            async def transit_message_handler(self, next_handler, packet):
+                self.logger.info(f"Received {packet.type} from {packet.sender}")
+                if packet.sender in BLOCKED_NODES:
+                    return  # drop packet
+                return await next_handler(packet)
+        """
+        return await next_handler(packet)
+
     def transporter_send(
         self, next_send: Callable[[str, bytes, dict[str, Any]], Awaitable[None]]
     ) -> Callable[[str, bytes, dict[str, Any]], Awaitable[None]]:

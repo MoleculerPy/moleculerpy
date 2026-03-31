@@ -183,10 +183,11 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 
 # Дорожная карта
 
-## Текущий статус (v0.14.5)
+## Текущий статус (v0.14.6)
 - Полный жизненный цикл сервисов
 - Транспортеры: NATS, Redis, Memory
 - Подключаемые сериализаторы (JSON, MsgPack) — MsgPack в 2x быстрее на больших данных
+- 4/4 хука transit middleware (publish, send, receive, message handler)
 - Балансированная обработка запросов/событий через NATS queue groups (`disable_balancer=True`)
 - 22 встроенных middleware
 - 5 стратегий балансировки нагрузки
@@ -198,7 +199,6 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 - Pre-commit/push хуки (ruff, mypy, pytest) + Codecov интеграция
 
 ## Планируемые возможности
-- Хук middleware для транзита (transitMessageHandler)
 - REST API Gateway (moleculerpy-web)
 - TCP транспортер с протоколом Gossip
 - Адаптеры баз данных (moleculerpy-db)
