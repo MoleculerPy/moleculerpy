@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.4] - 2026-03-31
+
+### Added
+- **Pluggable Serializer System** (PRD-007)
+  - `BaseSerializer` ABC with sync/async methods and thread offload (>1MB)
+  - `JsonSerializer` — extracted from transporters, proper error handling
+  - `MsgPackSerializer` — 2x faster throughput, 40-64% smaller payloads on large data
+  - `resolve_serializer()` factory — `Settings(serializer="msgpack")` just works
+  - `SerializationError` in error hierarchy
+  - `MAX_PAYLOAD_BYTES` (8MB) protection against DoS
+  - `pip install moleculerpy[msgpack]` for MsgPack support
+- **Transit P0 Safety Fixes** (PRD-006)
+  - Protocol version check — reject packets with incompatible `ver`
+  - NodeID conflict detection — graceful shutdown on duplicate ID
+  - `_SELF_ECHO_TOPICS` exclusion (DISCOVER, HEARTBEAT, INFO)
+  - `_shutting_down` guard against repeated `broker.stop()`
+  - `ServiceNotFoundError` instead of generic `Exception`
+- **Pre-commit hooks** — ruff format + check on commit, mypy + pytest on push
+- Demo app `--serializer` flag for JSON/MSGPACK selection
+
+### Fixed
+- Middleware order for `transporter_receive` — `reversed()` symmetric with send
+- Remote requests/events now use `wrapped_handler` (middleware bypass fix)
+- Memory transporter double-deserialization eliminated (sender via meta dict)
+- MsgPack `strict_map_key=True` preventing integer key bypass
+- JSON deserializer catches `RecursionError` (nested bomb protection)
+- Log injection prevention — `%r` for network-supplied data
+- 9 pre-existing mypy errors fixed (encryption.py, action_logger.py, context_tracker.py)
+- `setattr` → direct assignment in context_tracker.py (ruff B010)
+
+### Changed
+- All transporters use pluggable `transit.serializer` instead of hardcoded JSON
+- `_broker` typed as `ServiceBroker | None` (was `Any`)
+- `_wrapped_publish` typed as `Callable[[Packet], Awaitable[None]] | None` (was `Any`)
+- `PROTOCOL_VERSION` constant in transit.py
+- Pre-commit ruff updated v0.1.10 → v0.15.0
+- 22 middlewares (was 19 in docs)
+
 ## [0.14.1] - 2026-01-31
 
 ### Added
