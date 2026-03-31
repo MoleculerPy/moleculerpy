@@ -32,6 +32,7 @@ class NatsTransporter(Transporter):
     """
 
     name = "nats"
+    has_built_in_balancer: bool = True
 
     def __init__(
         self,
@@ -54,6 +55,7 @@ class NatsTransporter(Transporter):
         self.handler = handler
         self.node_id = node_id
         self.nc: Any | None = None
+        self._balanced_subscriptions: list[Any] = []
 
     def get_topic_name(self, command: str, node_id: str | None = None) -> str:
         """Generate a NATS topic name for a command.
@@ -210,6 +212,73 @@ class NatsTransporter(Transporter):
 
         topic_name = self.get_topic_name(command, topic)
         await self.nc.subscribe(topic_name, cb=self.message_handler)
+
+    async def subscribe_balanced_request(self, action: str) -> None:
+        """Subscribe to balanced request topic using NATS queue groups.
+
+        Args:
+            action: Action name to subscribe to
+        """
+        if not self.nc:
+            raise RuntimeError("Not connected to NATS server")
+        topic = f"MOL.REQB.{action}"
+        sub = await self.nc.subscribe(topic, queue=action, cb=self.message_handler)
+        self._balanced_subscriptions.append(sub)
+
+    async def subscribe_balanced_event(self, event: str, group: str) -> None:
+        """Subscribe to balanced event topic using NATS queue groups.
+
+        Args:
+            event: Event name to subscribe to
+            group: Consumer group name
+        """
+        if not self.nc:
+            raise RuntimeError("Not connected to NATS server")
+        nats_event = event.replace("**", ">")
+        topic = f"MOL.EVENTB.{group}.{nats_event}"
+        sub = await self.nc.subscribe(topic, queue=group, cb=self.message_handler)
+        self._balanced_subscriptions.append(sub)
+
+    async def publish_balanced_request(self, packet: Packet) -> None:
+        """Publish a balanced request packet via NATS.
+
+        Args:
+            packet: Packet to publish
+        """
+        if not self.nc:
+            raise RuntimeError("Not connected to NATS server")
+        action = packet.payload.get("action", "")
+        if not action:
+            logger.warning("Cannot publish balanced request: missing action field")
+            return
+        topic = f"MOL.REQB.{action}"
+        payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
+        data = await self.transit.serializer.serialize_async(payload)
+        await self.send_with_middleware(topic, data, {"packet": packet})
+
+    async def publish_balanced_event(self, packet: Packet, group: str) -> None:
+        """Publish a balanced event packet via NATS.
+
+        Args:
+            packet: Packet to publish
+            group: Consumer group name
+        """
+        if not self.nc:
+            raise RuntimeError("Not connected to NATS server")
+        event = packet.payload.get("event", "")
+        if not event:
+            logger.warning("Cannot publish balanced event: missing event field")
+            return
+        topic = f"MOL.EVENTB.{group}.{event}"
+        payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
+        data = await self.transit.serializer.serialize_async(payload)
+        await self.send_with_middleware(topic, data, {"packet": packet})
+
+    async def unsubscribe_from_balanced_commands(self) -> None:
+        """Unsubscribe all balanced subscriptions."""
+        for sub in self._balanced_subscriptions:
+            await sub.unsubscribe()
+        self._balanced_subscriptions.clear()
 
     @classmethod
     def from_config(
