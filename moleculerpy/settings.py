@@ -31,6 +31,9 @@ class Settings:
             against infinite recursion in cyclic service calls.
         strategy: Load balancing strategy name ('RoundRobin', 'Random')
         prefer_local: If True, prefer local endpoints over remote ones
+        disable_balancer: If True, delegate load balancing to the transporter
+            (e.g., NATS queue groups). The broker will not perform client-side
+            balancing and will publish to balanced topics instead.
 
     Custom Logger Example:
         class ColoredLogger:
@@ -78,6 +81,7 @@ class Settings:
         prefer_local: bool = True,
         cacher: "bool | str | CacherOptions | BaseCacher | None" = None,
         namespace: str | None = None,
+        disable_balancer: bool = False,
     ) -> None:
         self.transporter = transporter
         self.serializer = serializer
@@ -95,6 +99,7 @@ class Settings:
         self.prefer_local = prefer_local
         self.cacher = cacher
         self.namespace = namespace
+        self.disable_balancer = disable_balancer
 
         # Validate all settings
         self._validate()
