@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from .registry import Action, Event, Registry
     from .settings import Settings
 
-from .errors import MoleculerError, RemoteCallError, ServiceNotFoundError
+from .errors import BrokerDisconnectedError, MoleculerError, RemoteCallError, ServiceNotFoundError
 from .packet import Packet, Topic
 from .serializers import BaseSerializer, resolve_serializer
 from .stream import AsyncStream, PendingStream, StreamChunk, StreamMetadata, StreamState
@@ -1018,16 +1018,36 @@ class Transit:
         endpoint: "Event",
         context: "Context",
         marshalled_context: dict[str, Any] | None = None,
+        groups: list[str] | None = None,
     ) -> None:
         """Send an event to a remote service.
+
+        When disable_balancer=True and groups are provided, the event is
+        routed through prepublish with target=None so the transporter's
+        built-in balancer distributes it across groups.
 
         Args:
             endpoint: Event endpoint to send to
             context: Event context
             marshalled_context: Optional pre-marshalled context payload
+            groups: Optional list of consumer groups for balanced delivery
         """
         payload = marshalled_context if marshalled_context is not None else context.marshall()
-        await self.publish(Packet(Topic.EVENT, endpoint.node_id, payload))
+
+        # Balanced event path: target=None + groups in payload
+        if (
+            self._broker
+            and self._broker.settings.disable_balancer
+            and self.transporter.has_built_in_balancer
+            and groups
+        ):
+            payload["groups"] = groups
+            packet = Packet(Topic.EVENT, None, payload)
+            await self.prepublish(packet)
+            return
+
+        # Normal event path: targeted to specific node
+        await self.prepublish(Packet(Topic.EVENT, endpoint.node_id, payload))
 
     async def make_balanced_subscriptions(self) -> None:
         """Subscribe to balanced topics for all local actions and events.
@@ -1061,13 +1081,27 @@ class Transit:
                 await self.transporter.subscribe_balanced_event(event_name, group)
 
     async def prepublish(self, packet: Packet) -> None:
-        """Route packet to balanced or normal publish based on target.
+        """Route packet to balanced or normal publish.
+
+        This is the MAIN entry point for ALL outgoing packets.
+        Node.js equivalent: transit-base.js prepublish().
 
         When disable_balancer=True and transporter has built-in balancer:
         - REQUEST with no target -> publish_balanced_request
         - EVENT with no target + groups -> publish_balanced_event per group
         - Everything else -> normal publish
+
+        Also checks connection state and raises BrokerDisconnectedError
+        for REQUEST/EVENT packets when transporter is not connected.
         """
+        # Check disconnected state (Node.js compat)
+        if not self._is_transporter_connected():
+            if packet.type in (Topic.REQUEST, Topic.EVENT):
+                raise BrokerDisconnectedError()
+            # Skip internal packets (INFO, HEARTBEAT, etc.) silently
+            return
+
+        # Balanced routing (only when disable_balancer=True + has_built_in_balancer)
         if (
             self._broker
             and self._broker.settings.disable_balancer
@@ -1092,6 +1126,22 @@ class Transit:
 
         # Normal publish (existing behavior)
         await self.publish(packet)
+
+    def _is_transporter_connected(self) -> bool:
+        """Check if the transporter is connected.
+
+        Checks common connection state indicators across transporters.
+        """
+        # Check for explicit 'connected' property first
+        connected = getattr(self.transporter, "connected", None)
+        if connected is not None:
+            return bool(connected)
+        # NATS: check nc attribute
+        nc = getattr(self.transporter, "nc", None)
+        if nc is not None:
+            return True
+        # Fallback: assume connected if _was_connected is True
+        return self._was_connected
 
     async def request_without_endpoint(
         self,

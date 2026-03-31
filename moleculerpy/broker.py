@@ -18,7 +18,12 @@ if TYPE_CHECKING:
     from .service import Service
 
 from .discoverer import Discoverer
-from .errors import GracefulStopTimeoutError, MaxCallLevelError, ServiceNotFoundError
+from .errors import (
+    GracefulStopTimeoutError,
+    MaxCallLevelError,
+    MoleculerError,
+    ServiceNotFoundError,
+)
 from .latency import LatencyMonitor
 from .lifecycle import Lifecycle
 from .local_bus import LocalBus
@@ -906,6 +911,14 @@ class ServiceBroker:
         Raises:
             ServiceNotFoundError: If action is not found anywhere
         """
+        # Guard: transit must be available for balanced calls
+        if not self.transit:
+            raise MoleculerError(
+                message="Transit not available for balanced call",
+                code=500,
+                type="TRANSIT_NOT_AVAILABLE",
+            )
+
         # Validate action exists (but don't select specific endpoint)
         action = self.registry.get_action(action_name)
         if not action:

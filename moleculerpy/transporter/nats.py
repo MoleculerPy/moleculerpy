@@ -6,6 +6,7 @@ in a MoleculerPy cluster using the NATS messaging system.
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -234,7 +235,7 @@ class NatsTransporter(Transporter):
         """
         if not self.nc:
             raise RuntimeError("Not connected to NATS server")
-        nats_event = event.replace("**", ">")
+        nats_event = re.sub(r"\*\*.*$", ">", event)
         topic = f"MOL.EVENTB.{group}.{nats_event}"
         sub = await self.nc.subscribe(topic, queue=group, cb=self.message_handler)
         self._balanced_subscriptions.append(sub)

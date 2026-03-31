@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from moleculerpy.errors import BrokerDisconnectedError, MoleculerError
 from moleculerpy.packet import Packet, Topic
 from moleculerpy.settings import Settings
 from moleculerpy.transporter.base import Transporter
@@ -172,6 +173,15 @@ class TestBalancedNatsTransporter:
         await t.subscribe_balanced_event("user.**", "users")
         t.nc.subscribe.assert_called_once_with(
             "MOL.EVENTB.users.user.>", queue="users", cb=t.message_handler
+        )
+
+    @pytest.mark.asyncio
+    async def test_subscribe_balanced_event_wildcard_with_trailing(self) -> None:
+        """NATS wildcard: 'sensor.**.data' -> 'sensor.>' (removes everything after **)."""
+        t = self._make_nats_transporter()
+        await t.subscribe_balanced_event("sensor.**.data", "sensors")
+        t.nc.subscribe.assert_called_once_with(
+            "MOL.EVENTB.sensors.sensor.>", queue="sensors", cb=t.message_handler
         )
 
 
@@ -803,3 +813,188 @@ class TestRequestWithoutEndpointError:
             await transit.request_without_endpoint("math.add", context)
 
         await task
+
+
+# =============================================================================
+# TestPrepublishDisconnected
+# =============================================================================
+
+
+class TestPrepublishDisconnected:
+    """Tests for prepublish disconnected check."""
+
+    def _make_transit(self) -> Any:
+        """Create a Transit with mocked dependencies (disconnected state)."""
+        from moleculerpy.transit import Transit
+
+        settings = MagicMock()
+        settings.transporter = "nats://localhost:4222"
+        settings.serializer = "JSON"
+
+        with patch("moleculerpy.transit.Transporter") as mock_cls:
+            transporter = MagicMock()
+            transporter.has_built_in_balancer = True
+            # Simulate disconnected: nc=None and no 'connected' attr
+            transporter.nc = None
+            del transporter.connected  # ensure getattr falls through
+            mock_cls.get_by_name.return_value = transporter
+
+            transit = Transit(
+                node_id="test-node",
+                registry=MagicMock(),
+                node_catalog=MagicMock(),
+                settings=settings,
+                logger=MagicMock(),
+                lifecycle=MagicMock(),
+            )
+
+        transit.transporter = transporter
+        transit._was_connected = False
+
+        broker = MagicMock()
+        broker.settings.disable_balancer = True
+        transit._broker = broker
+        transit._wrapped_publish = AsyncMock()
+
+        return transit
+
+    @pytest.mark.asyncio
+    async def test_prepublish_raises_on_disconnected_request(self) -> None:
+        """prepublish raises BrokerDisconnectedError for REQUEST when disconnected."""
+        transit = self._make_transit()
+        packet = Packet(Topic.REQUEST, None, {"action": "math.add"})
+
+        with pytest.raises(BrokerDisconnectedError):
+            await transit.prepublish(packet)
+
+    @pytest.mark.asyncio
+    async def test_prepublish_raises_on_disconnected_event(self) -> None:
+        """prepublish raises BrokerDisconnectedError for EVENT when disconnected."""
+        transit = self._make_transit()
+        packet = Packet(Topic.EVENT, None, {"event": "user.created", "groups": ["users"]})
+
+        with pytest.raises(BrokerDisconnectedError):
+            await transit.prepublish(packet)
+
+    @pytest.mark.asyncio
+    async def test_prepublish_silently_skips_internal_when_disconnected(self) -> None:
+        """prepublish silently skips INFO/HEARTBEAT packets when disconnected."""
+        transit = self._make_transit()
+
+        # INFO packet should not raise, just return silently
+        packet = Packet(Topic.INFO, None, {})
+        await transit.prepublish(packet)  # should not raise
+
+        transit._wrapped_publish.assert_not_called()
+        transit.transporter.publish_balanced_request.assert_not_called()
+
+
+# =============================================================================
+# TestSendEventBalanced
+# =============================================================================
+
+
+class TestSendEventBalanced:
+    """Tests for send_event routing through prepublish when balanced."""
+
+    def _make_transit(
+        self, disable_balancer: bool = True, has_built_in_balancer: bool = True
+    ) -> Any:
+        """Create a Transit with mocked dependencies."""
+        from moleculerpy.transit import Transit
+
+        settings = MagicMock()
+        settings.transporter = "nats://localhost:4222"
+        settings.serializer = "JSON"
+
+        with patch("moleculerpy.transit.Transporter") as mock_cls:
+            transporter = MagicMock()
+            transporter.has_built_in_balancer = has_built_in_balancer
+            transporter.publish_balanced_event = AsyncMock()
+            transporter.nc = MagicMock()  # Connected
+            mock_cls.get_by_name.return_value = transporter
+
+            transit = Transit(
+                node_id="test-node",
+                registry=MagicMock(),
+                node_catalog=MagicMock(),
+                settings=settings,
+                logger=MagicMock(),
+                lifecycle=MagicMock(),
+            )
+
+        transit.transporter = transporter
+
+        broker = MagicMock()
+        broker.settings.disable_balancer = disable_balancer
+        transit._broker = broker
+        transit._wrapped_publish = AsyncMock()
+        transit._was_connected = True
+
+        return transit
+
+    @pytest.mark.asyncio
+    async def test_send_event_balanced_with_groups(self) -> None:
+        """send_event routes through prepublish when balanced + groups."""
+        transit = self._make_transit()
+        endpoint = MagicMock()
+        endpoint.node_id = "remote-node"
+        context = MagicMock()
+        context.marshall.return_value = {"event": "user.created", "params": {}}
+
+        await transit.send_event(endpoint, context, groups=["users", "notifications"])
+
+        # Should route through balanced event publish, not normal publish
+        assert transit.transporter.publish_balanced_event.call_count == 2
+        transit._wrapped_publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_send_event_normal_without_groups(self) -> None:
+        """send_event uses normal publish when no groups provided."""
+        transit = self._make_transit()
+        endpoint = MagicMock()
+        endpoint.node_id = "remote-node"
+        context = MagicMock()
+        context.marshall.return_value = {"event": "user.created", "params": {}}
+
+        await transit.send_event(endpoint, context)
+
+        # Should use normal publish path (via prepublish -> publish)
+        transit.transporter.publish_balanced_event.assert_not_called()
+        transit._wrapped_publish.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_send_event_normal_when_balancer_not_disabled(self) -> None:
+        """send_event uses normal publish when disable_balancer=False, even with groups."""
+        transit = self._make_transit(disable_balancer=False)
+        endpoint = MagicMock()
+        endpoint.node_id = "remote-node"
+        context = MagicMock()
+        context.marshall.return_value = {"event": "user.created", "params": {}}
+
+        await transit.send_event(endpoint, context, groups=["users"])
+
+        # Should use normal publish (balanced not active)
+        transit.transporter.publish_balanced_event.assert_not_called()
+        transit._wrapped_publish.assert_called_once()
+
+
+# =============================================================================
+# TestCallWithoutBalancerNoTransit
+# =============================================================================
+
+
+class TestCallWithoutBalancerNoTransit:
+    """Tests for call_without_balancer when transit is None."""
+
+    @pytest.mark.asyncio
+    async def test_call_without_balancer_no_transit(self) -> None:
+        """call_without_balancer raises MoleculerError when transit is None."""
+        from moleculerpy.broker import ServiceBroker
+
+        broker = ServiceBroker(id="test-node")
+        broker.transit = None  # type: ignore[assignment]
+
+        context = MagicMock()
+        with pytest.raises(MoleculerError, match="Transit not available"):
+            await broker.call_without_balancer("math.add", context)
