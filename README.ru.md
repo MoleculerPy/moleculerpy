@@ -3,6 +3,7 @@
 [![CI](https://github.com/MoleculerPy/moleculerpy/workflows/CI/badge.svg)](https://github.com/MoleculerPy/moleculerpy/actions)
 [![PyPI version](https://img.shields.io/pypi/v/moleculerpy.svg)](https://pypi.org/project/moleculerpy/)
 [![Python versions](https://img.shields.io/pypi/pyversions/moleculerpy.svg)](https://pypi.org/project/moleculerpy/)
+[![codecov](https://codecov.io/gh/MoleculerPy/moleculerpy/graph/badge.svg)](https://codecov.io/gh/MoleculerPy/moleculerpy)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 > **Language / Язык**: [English](README.md) | [Русский](README.ru.md)
