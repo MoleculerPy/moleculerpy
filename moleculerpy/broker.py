@@ -18,7 +18,12 @@ if TYPE_CHECKING:
     from .service import Service
 
 from .discoverer import Discoverer
-from .errors import GracefulStopTimeoutError, MaxCallLevelError, ServiceNotFoundError
+from .errors import (
+    GracefulStopTimeoutError,
+    MaxCallLevelError,
+    MoleculerError,
+    ServiceNotFoundError,
+)
 from .latency import LatencyMonitor
 from .lifecycle import Lifecycle
 from .local_bus import LocalBus
@@ -448,6 +453,10 @@ class ServiceBroker:
         # Connect to the cluster
         await self.transit.connect()
 
+        # Set up balanced subscriptions if disable_balancer is enabled
+        if self.settings.disable_balancer:
+            await self.transit.make_balanced_subscriptions()
+
         # Start discoverer after transit is connected
         if hasattr(self.discoverer, "start"):
             await self.discoverer.start()
@@ -829,6 +838,17 @@ class ServiceBroker:
         if not endpoint:
             raise ServiceNotFoundError(action_name, self.nodeID)
 
+        # When disable_balancer=True, remote calls delegate to transporter's
+        # built-in balancer (NATS queue groups). Local calls still execute
+        # locally for performance (prefer_local semantics).
+        if (
+            not endpoint.is_local
+            and self.settings.disable_balancer
+            and self.transit
+            and self.transit.transporter.has_built_in_balancer
+        ):
+            return await self.call_without_balancer(action_name, context, timeout=timeout)
+
         if endpoint.is_local:
             # Handle local action call using pre-wrapped handler (Moleculer pattern)
             # Use wrapped_handler if available, otherwise fall back to raw handler
@@ -867,6 +887,44 @@ class ServiceBroker:
             )
 
             return await wrapped_handler(context)
+
+    async def call_without_balancer(
+        self,
+        action_name: ActionName | str,
+        context: "Context",
+        timeout: float | None = None,
+    ) -> Any:
+        """Call action without broker-side endpoint selection.
+
+        Delegates balancing to transporter (e.g., NATS queue groups).
+        The request is published to a balanced topic and any node with
+        the action can handle it.
+
+        Args:
+            action_name: Fully qualified action name (service.action)
+            context: Pre-created context for the call
+            timeout: Optional per-call timeout override
+
+        Returns:
+            Result from the action
+
+        Raises:
+            ServiceNotFoundError: If action is not found anywhere
+        """
+        # Guard: transit must be available for balanced calls
+        if not self.transit:
+            raise MoleculerError(
+                message="Transit not available for balanced call",
+                code=500,
+                type="TRANSIT_NOT_AVAILABLE",
+            )
+
+        # Validate action exists (but don't select specific endpoint)
+        action = self.registry.get_action(action_name)
+        if not action:
+            raise ServiceNotFoundError(str(action_name), node_id=self.nodeID)
+
+        return await self.transit.request_without_endpoint(str(action_name), context, timeout)
 
     async def _emit_core(
         self,

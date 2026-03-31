@@ -27,6 +27,8 @@ class Transporter(ABC):
     - receive(cmd, bytes, meta) → deserialize → handler(packet) (can be wrapped)
     """
 
+    has_built_in_balancer: bool = False
+
     def __init__(self, name: str) -> None:
         """Initialize the transporter.
 
@@ -102,6 +104,26 @@ class Transporter(ABC):
             meta: Metadata (subject, etc.)
         """
         pass
+
+    async def subscribe_balanced_request(self, action: str) -> None:
+        """Subscribe to balanced request topic for an action. No-op in base."""
+        return
+
+    async def subscribe_balanced_event(self, event: str, group: str) -> None:
+        """Subscribe to balanced event topic. No-op in base."""
+        return
+
+    async def publish_balanced_request(self, packet: "Packet") -> None:
+        """Publish a balanced request packet. No-op in base."""
+        return
+
+    async def publish_balanced_event(self, packet: "Packet", group: str) -> None:
+        """Publish a balanced event packet. No-op in base."""
+        return
+
+    async def unsubscribe_from_balanced_commands(self) -> None:
+        """Unsubscribe all balanced subscriptions. No-op in base."""
+        return
 
     async def send_with_middleware(self, topic: str, data: bytes, meta: dict[str, Any]) -> None:
         """Send through middleware chain if configured, else direct send.
