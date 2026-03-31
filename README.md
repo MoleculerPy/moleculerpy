@@ -5,6 +5,8 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/moleculerpy.svg)](https://pypi.org/project/moleculerpy/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+> **🌐 Language / Язык**: [English](README.md) | [Русский](README.ru.md)
+
 MoleculerPy is a fast, modern and powerful microservices framework for [Python](https://python.org). It helps you to build efficient, reliable & scalable services. MoleculerPy provides many features for building and managing your microservices.
 
 **Website**: [https://moleculerpy.services](https://moleculerpy.services)
