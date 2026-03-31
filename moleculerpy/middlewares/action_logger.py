@@ -173,7 +173,11 @@ class ActionLogger(Middleware):
         """
         # Get logger from broker
         self._logger = broker.logger
-        log = self._logger  # local binding — always non-None after assignment
+
+        if self._logger is None:
+            return
+
+        log = self._logger
 
         # Get log function by level
         if self.log_level == "debug":

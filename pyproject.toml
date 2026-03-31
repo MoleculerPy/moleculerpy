@@ -176,3 +176,7 @@ warn_unused_configs = true
 [[tool.mypy.overrides]]
 module = ["cryptography.*", "watchdog.*", "nats.*", "redis.*", "prometheus_client.*", "opentelemetry.*", "psutil.*", "msgpack.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["moleculerpy.middleware.hot_reload"]
+disallow_subclassing_any = false
