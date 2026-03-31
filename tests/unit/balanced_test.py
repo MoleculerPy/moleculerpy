@@ -701,6 +701,105 @@ class TestNatsBalancedEdgeCases:
         with pytest.raises(RuntimeError, match="Not connected"):
             await t.subscribe_balanced_request("math.add")
 
+    @pytest.mark.asyncio
+    async def test_subscribe_balanced_event_raises_when_not_connected(self) -> None:
+        """NATS subscribe_balanced_event raises RuntimeError when nc=None."""
+        from moleculerpy.transporter.nats import NatsTransporter
+
+        transit = MagicMock()
+        t = NatsTransporter("nats://localhost:4222", transit, handler=AsyncMock(), node_id="node-1")
+        t.nc = None
+
+        with pytest.raises(RuntimeError, match="Not connected"):
+            await t.subscribe_balanced_event("user.created", "users")
+
+    @pytest.mark.asyncio
+    async def test_publish_balanced_request_raises_when_not_connected(self) -> None:
+        """NATS publish_balanced_request raises RuntimeError when nc=None."""
+        from moleculerpy.transporter.nats import NatsTransporter
+
+        transit = MagicMock()
+        t = NatsTransporter("nats://localhost:4222", transit, handler=AsyncMock(), node_id="node-1")
+        t.nc = None
+
+        packet = Packet(Topic.REQUEST, None, {"action": "math.add"})
+        with pytest.raises(RuntimeError, match="Not connected"):
+            await t.publish_balanced_request(packet)
+
+    @pytest.mark.asyncio
+    async def test_publish_balanced_event_raises_when_not_connected(self) -> None:
+        """NATS publish_balanced_event raises RuntimeError when nc=None."""
+        from moleculerpy.transporter.nats import NatsTransporter
+
+        transit = MagicMock()
+        t = NatsTransporter("nats://localhost:4222", transit, handler=AsyncMock(), node_id="node-1")
+        t.nc = None
+
+        packet = Packet(Topic.EVENT, None, {"event": "user.created"})
+        with pytest.raises(RuntimeError, match="Not connected"):
+            await t.publish_balanced_event(packet, "users")
+
+    @pytest.mark.asyncio
+    async def test_publish_balanced_request_empty_action_warns(self) -> None:
+        """NATS publish_balanced_request with empty action logs warning and returns."""
+        from moleculerpy.transporter.nats import NatsTransporter
+
+        transit = MagicMock()
+        transit.serializer = MagicMock()
+        transit.serializer.serialize_async = AsyncMock(return_value=b"serialized")
+        t = NatsTransporter("nats://localhost:4222", transit, handler=AsyncMock(), node_id="node-1")
+        t.nc = MagicMock()
+        t.nc.publish = AsyncMock()
+
+        packet = Packet(Topic.REQUEST, None, {"params": {"a": 1}})  # no "action" key
+        with patch("moleculerpy.transporter.nats.logger") as mock_logger:
+            await t.publish_balanced_request(packet)
+            mock_logger.warning.assert_called_once()
+            assert "missing action" in mock_logger.warning.call_args[0][0].lower()
+
+        # nc.publish should NOT have been called
+        t.nc.publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_publish_balanced_event_empty_event_warns(self) -> None:
+        """NATS publish_balanced_event with empty event logs warning and returns."""
+        from moleculerpy.transporter.nats import NatsTransporter
+
+        transit = MagicMock()
+        transit.serializer = MagicMock()
+        transit.serializer.serialize_async = AsyncMock(return_value=b"serialized")
+        t = NatsTransporter("nats://localhost:4222", transit, handler=AsyncMock(), node_id="node-1")
+        t.nc = MagicMock()
+        t.nc.publish = AsyncMock()
+
+        packet = Packet(Topic.EVENT, None, {"params": {}})  # no "event" key
+        with patch("moleculerpy.transporter.nats.logger") as mock_logger:
+            await t.publish_balanced_event(packet, "users")
+            mock_logger.warning.assert_called_once()
+            assert "missing event" in mock_logger.warning.call_args[0][0].lower()
+
+        t.nc.publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unsubscribe_from_balanced_commands_drains(self) -> None:
+        """Unsubscribe actually calls unsubscribe on each subscription object."""
+        from moleculerpy.transporter.nats import NatsTransporter
+
+        transit = MagicMock()
+        t = NatsTransporter("nats://localhost:4222", transit, handler=AsyncMock(), node_id="node-1")
+
+        sub1 = MagicMock()
+        sub1.unsubscribe = AsyncMock()
+        sub2 = MagicMock()
+        sub2.unsubscribe = AsyncMock()
+        t._balanced_subscriptions = [sub1, sub2]
+
+        await t.unsubscribe_from_balanced_commands()
+
+        sub1.unsubscribe.assert_called_once()
+        sub2.unsubscribe.assert_called_once()
+        assert len(t._balanced_subscriptions) == 0
+
 
 # =============================================================================
 # TestMakeBalancedSubscriptionsNoBroker
@@ -998,3 +1097,131 @@ class TestCallWithoutBalancerNoTransit:
         context = MagicMock()
         with pytest.raises(MoleculerError, match="Transit not available"):
             await broker.call_without_balancer("math.add", context)
+
+
+# =============================================================================
+# TestIsTransporterConnectedFallbacks
+# =============================================================================
+
+
+class TestIsTransporterConnectedFallbacks:
+    """Tests for transit._is_transporter_connected() fallback paths."""
+
+    def _make_transit(self) -> Any:
+        """Create a Transit with minimal mocks."""
+        from moleculerpy.transit import Transit
+
+        settings = MagicMock()
+        settings.transporter = "nats://localhost:4222"
+        settings.serializer = "JSON"
+
+        with patch("moleculerpy.transit.Transporter") as mock_cls:
+            transporter = MagicMock()
+            mock_cls.get_by_name.return_value = transporter
+
+            transit = Transit(
+                node_id="test-node",
+                registry=MagicMock(),
+                node_catalog=MagicMock(),
+                settings=settings,
+                logger=MagicMock(),
+                lifecycle=MagicMock(),
+            )
+
+        return transit
+
+    def test_connected_attr_true(self) -> None:
+        """_is_transporter_connected returns True when transporter.connected=True."""
+        transit = self._make_transit()
+        transit.transporter.connected = True
+        assert transit._is_transporter_connected() is True
+
+    def test_connected_attr_false(self) -> None:
+        """_is_transporter_connected returns False when transporter.connected=False."""
+        transit = self._make_transit()
+        transit.transporter.connected = False
+        assert transit._is_transporter_connected() is False
+
+    def test_no_connected_attr_nc_present(self) -> None:
+        """_is_transporter_connected returns True when nc is not None (no connected attr)."""
+        transit = self._make_transit()
+        # Remove 'connected' attr so getattr falls through
+        del transit.transporter.connected
+        transit.transporter.nc = MagicMock()
+        assert transit._is_transporter_connected() is True
+
+    def test_no_connected_no_nc_fallback_was_connected_true(self) -> None:
+        """_is_transporter_connected falls back to _was_connected=True."""
+        transit = self._make_transit()
+        del transit.transporter.connected
+        transit.transporter.nc = None
+        transit._was_connected = True
+        assert transit._is_transporter_connected() is True
+
+    def test_no_connected_no_nc_fallback_was_connected_false(self) -> None:
+        """_is_transporter_connected falls back to _was_connected=False."""
+        transit = self._make_transit()
+        del transit.transporter.connected
+        transit.transporter.nc = None
+        transit._was_connected = False
+        assert transit._is_transporter_connected() is False
+
+    def test_no_connected_no_nc_attr_at_all(self) -> None:
+        """_is_transporter_connected falls back to _was_connected when nc attr missing."""
+        transit = self._make_transit()
+        del transit.transporter.connected
+        del transit.transporter.nc
+        transit._was_connected = False
+        assert transit._is_transporter_connected() is False
+
+
+# =============================================================================
+# TestCallRoutingToCallWithoutBalancer
+# =============================================================================
+
+
+class TestCallRoutingToCallWithoutBalancer:
+    """Tests for broker.call() routing to call_without_balancer for remote endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_call_routes_to_call_without_balancer_for_remote(self) -> None:
+        """broker.call() delegates to call_without_balancer when disable_balancer + remote."""
+        from moleculerpy.broker import ServiceBroker
+
+        broker = ServiceBroker(id="test-node")
+        broker.settings.disable_balancer = True
+
+        # Mock registry endpoint
+        endpoint = MagicMock()
+        endpoint.is_local = False
+        broker.registry = MagicMock()
+        broker.registry.get_action_endpoint.return_value = endpoint
+        broker.registry.get_action.return_value = MagicMock()
+
+        # Mock transit with built-in balancer
+        broker.transit = MagicMock()
+        broker.transit.transporter = MagicMock()
+        broker.transit.transporter.has_built_in_balancer = True
+        broker.transit.request_without_endpoint = AsyncMock(return_value=99)
+
+        result = await broker.call("math.add", {"a": 1, "b": 2})
+
+        assert result == 99
+        broker.transit.request_without_endpoint.assert_called_once()
+
+
+# =============================================================================
+# TestVersionFallback
+# =============================================================================
+
+
+class TestVersionFallback:
+    """Test that __version__ is accessible."""
+
+    def test_version_exists(self) -> None:
+        """moleculerpy.__version__ is set (either from metadata or fallback)."""
+        import moleculerpy
+
+        assert hasattr(moleculerpy, "__version__")
+        assert isinstance(moleculerpy.__version__, str)
+        assert len(moleculerpy.__version__) > 0
