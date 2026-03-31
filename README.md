@@ -164,7 +164,7 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 
 # Roadmap
 
-## Current status (v0.14.3)
+## Current status (v0.14.4)
 - Core framework with full service lifecycle
 - NATS, Redis, Memory transporters
 - Pluggable serializers (JSON, MsgPack) — MsgPack 2x faster on large payloads
