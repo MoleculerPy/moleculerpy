@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.6] - 2026-03-31
+
+### Added
+- **Transit Message Handler Hook** (PRD-008)
+  - 4th and final transit middleware hook: `transit_message_handler`
+  - Intercepts packets after deserialization, before dispatch
+  - Use for: auth, rate limiting, audit logging, packet filtering, metrics
+  - 4/4 transit middleware hooks now complete (100% Node.js middleware API parity)
+
 ## [0.14.5] - 2026-03-31
 
 ### Added
