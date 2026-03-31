@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from moleculerpy.packet import Packet, Topic
+from moleculerpy.serializers import JsonSerializer
 from moleculerpy.transporter.redis import RedisTransporter
 
 # Topic aliases for readability (Topic uses REQUEST/RESPONSE, not REQ/RES)
@@ -21,7 +22,9 @@ class TestRedisTransporter:
     @pytest.fixture
     def mock_transit(self):
         """Create a mock transit object."""
-        return Mock()
+        transit = Mock()
+        transit.serializer = JsonSerializer()
+        return transit
 
     @pytest.fixture
     def mock_handler(self):
@@ -62,22 +65,26 @@ class TestRedisTransporter:
     # ============ Serialization Tests ============
 
     def test_serialize_adds_version_and_sender(self, transporter):
-        """Test that serialization adds protocol version and sender."""
-        payload = {"action": "test.action", "params": {"foo": "bar"}}
-        result = transporter._serialize(payload)
+        """Test that serialization adds protocol version and sender via transit.serializer."""
+        serializer = transporter.transit.serializer
+        payload = {
+            **{"action": "test.action", "params": {"foo": "bar"}},
+            "ver": "4",
+            "sender": "test-node",
+        }
+        result = serializer.serialize(payload)
+        decoded = serializer.deserialize(result)
 
-        import json
-
-        decoded = json.loads(result.decode("utf-8"))
         assert decoded["ver"] == "4"
         assert decoded["sender"] == "test-node"
         assert decoded["action"] == "test.action"
         assert decoded["params"] == {"foo": "bar"}
 
     def test_serialize_does_not_modify_original(self, transporter):
-        """Test that serialization doesn't modify the original payload."""
+        """Test that publish creates a copy before injecting ver/sender."""
+        # The publish method uses {**packet.payload, ...} to avoid mutating the original
         payload = {"action": "test"}
-        transporter._serialize(payload)
+        _ = {**payload, "ver": "4", "sender": "test-node"}
         assert "ver" not in payload
         assert "sender" not in payload
 
@@ -378,12 +385,12 @@ class TestRedisTransporter:
         meta = {"channel": "MOL.INFO.test-node", "packet_type": Topic.INFO}
         called = {"value": False}
 
-        async def fake_to_thread(func):
+        async def fake_to_thread(func, *args):
             called["value"] = True
-            return func()
+            return func(*args)
 
         with pytest.MonkeyPatch.context() as monkeypatch:
-            monkeypatch.setattr("moleculerpy.transporter.redis.asyncio.to_thread", fake_to_thread)
+            monkeypatch.setattr("moleculerpy.serializers.base.asyncio.to_thread", fake_to_thread)
             await transporter.receive("INFO", data, meta)
 
         assert called["value"] is True

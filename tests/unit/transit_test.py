@@ -15,6 +15,7 @@ def mock_dependencies():
     mock_settings = MagicMock(transporter="nats://localhost:4222")
     # Ensure request_timeout is a float, not MagicMock
     mock_settings.request_timeout = 30.0
+    mock_settings.serializer = "JSON"
     return {
         "node_id": "test-node-123",
         "registry": MagicMock(),
@@ -320,9 +321,10 @@ class TestTransit:
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
             transit = Transit(**mock_dependencies)
 
-            # Setup mock event endpoint
+            # Setup mock event endpoint (fallback path: no wrapped_handler)
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock()
             mock_endpoint.name = "test.event"
             transit.registry.get_event.return_value = mock_endpoint
@@ -345,9 +347,10 @@ class TestTransit:
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
             transit = Transit(**mock_dependencies)
 
-            # Setup mock action endpoint
+            # Setup mock action endpoint (fallback path: no wrapped_handler)
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(return_value={"result": "success"})
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -376,9 +379,10 @@ class TestTransit:
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
             transit = Transit(**mock_dependencies)
 
-            # Setup mock action endpoint that raises error
+            # Setup mock action endpoint that raises error (fallback path: no wrapped_handler)
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(side_effect=ValueError("Test error"))
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -636,6 +640,8 @@ class TestTransit:
             packet = MagicMock()
             packet.type = MagicMock()
             packet.type.value = "UNKNOWN_TYPE"
+            packet.payload = {}  # Empty payload — no version to check
+            packet.sender = "other-node"
 
             # Should log warning but not raise
             await transit._message_handler(packet)
@@ -767,6 +773,7 @@ class TestTransit:
             # Setup mock action endpoint
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(return_value={"result": "success"})
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -816,6 +823,7 @@ class TestTransit:
             # Setup mock action endpoint that raises error
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(side_effect=ValueError("Test error"))
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -863,6 +871,7 @@ class TestTransit:
             # Setup mock action endpoint
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(return_value={"result": "success"})
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -896,6 +905,7 @@ class TestTransit:
             # Setup mock action endpoint
             mock_endpoint = MagicMock()
             mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = None
             mock_endpoint.handler = AsyncMock(return_value={"result": "success"})
             mock_endpoint.name = "test.action"
             mock_endpoint.params_schema = None
@@ -1227,3 +1237,348 @@ class TestTransitCoverageGaps:
 
             # Logger should have warning call
             transit.logger.warning.assert_called_with("No local handler for action: remote.action")
+
+
+class TestTransitP0SafetyFixes:
+    """Tests for PRD-006: Transit Layer P0 Safety Fixes."""
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        mock_settings = MagicMock(transporter="nats://localhost:4222")
+        mock_settings.request_timeout = 30.0
+        mock_settings.serializer = "JSON"
+        return {
+            "node_id": "test-node-p0",
+            "settings": mock_settings,
+            "registry": MagicMock(),
+            "lifecycle": MagicMock(),
+            "node_catalog": MagicMock(),
+            "logger": MagicMock(),
+        }
+
+    @pytest.fixture
+    def mock_transporter(self):
+        transporter = AsyncMock()
+        transporter.connect = AsyncMock()
+        transporter.disconnect = AsyncMock()
+        transporter.publish = AsyncMock()
+        transporter.subscribe = AsyncMock()
+        return transporter
+
+    # --- wrapped_handler positive tests ---
+
+    @pytest.mark.asyncio
+    async def test_handle_event_uses_wrapped_handler(self, mock_dependencies, mock_transporter):
+        """When wrapped_handler is set, it should be called instead of handler."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            mock_endpoint = MagicMock()
+            mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = AsyncMock()
+            mock_endpoint.handler = AsyncMock()
+            mock_endpoint.name = "test.event"
+            transit.registry.get_event.return_value = mock_endpoint
+
+            mock_context = MagicMock()
+            transit.lifecycle.rebuild_context.return_value = mock_context
+
+            packet = Packet(Topic.EVENT, "other-node", {"event": "test.event", "data": "test"})
+            await transit._handle_event(packet)
+
+            mock_endpoint.wrapped_handler.assert_called_once_with(mock_context)
+            mock_endpoint.handler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_request_uses_wrapped_handler(self, mock_dependencies, mock_transporter):
+        """When wrapped_handler is set, it should be called instead of handler."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            mock_endpoint = MagicMock()
+            mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = AsyncMock(return_value={"result": "wrapped"})
+            mock_endpoint.handler = AsyncMock()
+            mock_endpoint.name = "test.action"
+            mock_endpoint.params_schema = None
+            transit.registry.get_action.return_value = mock_endpoint
+
+            mock_context = MagicMock()
+            mock_context.id = "req-123"
+            mock_context.params = {}
+            transit.lifecycle.rebuild_context.return_value = mock_context
+
+            packet = Packet(Topic.REQUEST, "other-node", {"action": "test.action", "id": "req-123"})
+            packet.sender = "other-node"
+            await transit._handle_request(packet)
+
+            mock_endpoint.wrapped_handler.assert_called_once_with(mock_context)
+            mock_endpoint.handler.assert_not_called()
+
+    # --- Protocol version check ---
+
+    @pytest.mark.asyncio
+    async def test_rejects_incompatible_protocol_version(self, mock_dependencies, mock_transporter):
+        """Packets with protocol version != 4 should be dropped."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            packet = Packet(Topic.REQUEST, "other-node", {"ver": "3", "action": "test"})
+            packet.sender = "other-node"
+            await transit._message_handler(packet)
+
+            transit.logger.warning.assert_called_once()
+            assert "Protocol version mismatch" in transit.logger.warning.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_accepts_compatible_protocol_version(self, mock_dependencies, mock_transporter):
+        """Packets with protocol version 4 should be processed normally."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            packet = Packet(Topic.HEARTBEAT, "other-node", {"ver": "4", "cpu": 50})
+            packet.sender = "other-node"
+            await transit._message_handler(packet)
+
+            transit.logger.warning.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_accepts_packets_without_version(self, mock_dependencies, mock_transporter):
+        """Packets without ver field (e.g. PING/PONG) should be processed normally."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            packet = Packet(Topic.HEARTBEAT, "other-node", {"cpu": 50})
+            packet.sender = "other-node"
+            await transit._message_handler(packet)
+
+            transit.logger.warning.assert_not_called()
+
+    # --- NodeID conflict detection ---
+
+    @pytest.mark.asyncio
+    async def test_detects_node_id_conflict(self, mock_dependencies, mock_transporter):
+        """If a remote packet has the same nodeID as ours, shut down."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            # node_id is passed directly to Transit constructor
+            mock_dependencies["node_id"] = "my-node"
+            transit = Transit(**mock_dependencies)
+            transit._broker = MagicMock()
+            transit._broker.stop = AsyncMock()
+
+            # Use REQUEST topic — INFO is now in _SELF_ECHO_TOPICS and won't trigger conflict
+            packet = Packet(Topic.REQUEST, "my-node", {"action": "test", "ver": "4"})
+            packet.sender = "my-node"
+            await transit._message_handler(packet)
+
+            transit.logger.critical.assert_called_once()
+            assert "NodeID conflict" in transit.logger.critical.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_allows_own_discover_packets(self, mock_dependencies, mock_transporter):
+        """DISCOVER packets from self should not trigger conflict (normal behavior)."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            mock_dependencies["node_id"] = "my-node"
+            transit = Transit(**mock_dependencies)
+
+            packet = Packet(Topic.DISCOVER, "my-node", {})
+            packet.sender = "my-node"
+            await transit._message_handler(packet)
+
+            transit.logger.critical.assert_not_called()
+
+    # --- Test 1: Middleware receive order ---
+
+    @pytest.mark.asyncio
+    async def test_middleware_receive_order_is_reversed(self, mock_dependencies, mock_transporter):
+        """Verify transporter_receive wraps in reversed order (symmetric with send)."""
+        from moleculerpy.middleware.base import Middleware
+
+        order: list[str] = []
+
+        class MW_A(Middleware):
+            def transporter_receive(self, next_receive):
+                async def receive(cmd, data, meta):
+                    order.append("A")
+                    return await next_receive(cmd, data, meta)
+
+                return receive
+
+        class MW_B(Middleware):
+            def transporter_receive(self, next_receive):
+                async def receive(cmd, data, meta):
+                    order.append("B")
+                    return await next_receive(cmd, data, meta)
+
+                return receive
+
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            mock_broker = MagicMock()
+            mock_broker.middlewares = [MW_A(), MW_B()]
+
+            transit._wrap_methods(mock_broker)
+
+            # Call the wrapped receive
+            await transit.transporter._wrapped_receive("CMD", b"data", {})
+
+            # reversed() iteration means MW_B wraps first (inner), MW_A wraps second (outer).
+            # So execution order: A runs first, then B, then the actual receive.
+            assert order == ["A", "B"]
+
+    # --- Test 2: Protocol version as integer ---
+
+    @pytest.mark.asyncio
+    async def test_accepts_protocol_version_as_integer(self, mock_dependencies, mock_transporter):
+        """Protocol version 4 as integer should be accepted (str(4) == '4')."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            packet = Packet(Topic.HEARTBEAT, "other-node", {"ver": 4, "cpu": 50})
+            packet.sender = "other-node"
+            await transit._message_handler(packet)
+
+            transit.logger.warning.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_protocol_version_3_as_integer(self, mock_dependencies, mock_transporter):
+        """Protocol version 3 as integer should be rejected."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            packet = Packet(Topic.HEARTBEAT, "other-node", {"ver": 3, "cpu": 50})
+            packet.sender = "other-node"
+            await transit._message_handler(packet)
+
+            transit.logger.warning.assert_called_once()
+            assert "Protocol version mismatch" in transit.logger.warning.call_args[0][0]
+
+    # --- Test 3: broker.stop() called in conflict ---
+
+    @pytest.mark.asyncio
+    async def test_node_id_conflict_calls_broker_stop(self, mock_dependencies, mock_transporter):
+        """NodeID conflict should call broker.stop() via asyncio.create_task."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            mock_dependencies["node_id"] = "my-node"
+            transit = Transit(**mock_dependencies)
+            transit._broker = MagicMock()
+            transit._broker.stop = AsyncMock()
+
+            # Send a REQUEST from the same node_id (not in _SELF_ECHO_TOPICS)
+            packet = Packet(Topic.REQUEST, "my-node", {"action": "test", "ver": "4"})
+            packet.sender = "my-node"
+            await transit._message_handler(packet)
+
+            # Drain the event loop to let the created task run
+            await asyncio.sleep(0)
+
+            transit._broker.stop.assert_called_once()
+
+    # --- Test 4: wrapped_handler error path in _handle_request ---
+
+    @pytest.mark.asyncio
+    async def test_handle_request_wrapped_handler_error(self, mock_dependencies, mock_transporter):
+        """When wrapped_handler raises, error should be serialized in response."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            mock_endpoint = MagicMock()
+            mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = AsyncMock(side_effect=ValueError("MW failed"))
+            mock_endpoint.handler = AsyncMock()
+            mock_endpoint.name = "test.action"
+            mock_endpoint.params_schema = None
+            transit.registry.get_action.return_value = mock_endpoint
+
+            mock_context = MagicMock()
+            mock_context.id = "req-mw-err"
+            mock_context.params = {}
+            transit.lifecycle.rebuild_context.return_value = mock_context
+
+            packet = Packet(
+                Topic.REQUEST, "other-node", {"action": "test.action", "id": "req-mw-err"}
+            )
+            packet.sender = "other-node"
+            await transit._handle_request(packet)
+
+            mock_transporter.publish.assert_called_once()
+            response_packet = mock_transporter.publish.call_args[0][0]
+            assert response_packet.payload["success"] is False
+            assert "MW failed" in response_packet.payload["error"]["message"]
+            mock_endpoint.handler.assert_not_called()
+
+    # --- Test 5: wrapped_handler set, handler is None ---
+
+    @pytest.mark.asyncio
+    async def test_handle_event_wrapped_handler_only(self, mock_dependencies, mock_transporter):
+        """Event should work when wrapped_handler is set but handler is None."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            mock_endpoint = MagicMock()
+            mock_endpoint.is_local = True
+            mock_endpoint.wrapped_handler = AsyncMock()
+            mock_endpoint.handler = None
+            mock_endpoint.name = "test.event"
+            transit.registry.get_event.return_value = mock_endpoint
+
+            mock_context = MagicMock()
+            mock_context.need_ack = False
+            transit.lifecycle.rebuild_context.return_value = mock_context
+
+            packet = Packet(Topic.EVENT, "other-node", {"event": "test.event", "data": "test"})
+            await transit._handle_event(packet)
+
+            mock_endpoint.wrapped_handler.assert_called_once_with(mock_context)
+
+    # --- Test 6: Self-echo topics don't trigger conflict ---
+
+    @pytest.mark.asyncio
+    async def test_allows_own_heartbeat_packets(self, mock_dependencies, mock_transporter):
+        """HEARTBEAT from self should not trigger NodeID conflict."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            mock_dependencies["node_id"] = "my-node"
+            transit = Transit(**mock_dependencies)
+
+            packet = Packet(Topic.HEARTBEAT, "my-node", {"cpu": 50})
+            packet.sender = "my-node"
+            await transit._message_handler(packet)
+
+            transit.logger.critical.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_allows_own_info_packets(self, mock_dependencies, mock_transporter):
+        """INFO from self should not trigger NodeID conflict."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            mock_dependencies["node_id"] = "my-node"
+            transit = Transit(**mock_dependencies)
+
+            packet = Packet(Topic.INFO, "my-node", {"id": "my-node", "services": []})
+            packet.sender = "my-node"
+            await transit._message_handler(packet)
+
+            transit.logger.critical.assert_not_called()
+
+    # --- Test 7: Shutting down guard prevents multiple stop calls ---
+
+    @pytest.mark.asyncio
+    async def test_node_id_conflict_stops_only_once(self, mock_dependencies, mock_transporter):
+        """Multiple conflict packets should only trigger one broker.stop()."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            mock_dependencies["node_id"] = "my-node"
+            transit = Transit(**mock_dependencies)
+            transit._broker = MagicMock()
+            transit._broker.stop = AsyncMock()
+
+            # Send 3 conflict packets (REQUEST is not in _SELF_ECHO_TOPICS)
+            for _ in range(3):
+                packet = Packet(Topic.REQUEST, "my-node", {"action": "test", "ver": "4"})
+                packet.sender = "my-node"
+                await transit._message_handler(packet)
+
+            # Drain the event loop
+            await asyncio.sleep(0)
+
+            # broker.stop() should only have been called once
+            transit._broker.stop.assert_called_once()

@@ -10,9 +10,10 @@ from .bootstrap import configure_local_paths
 
 configure_local_paths()
 
-from moleculerpy import ServiceBroker, Settings
 from moleculerpy_channels import ChannelsMiddleware
 from moleculerpy_channels.adapters import NatsAdapter
+
+from moleculerpy import ServiceBroker, Settings
 
 from .services import (
     AnalyticsService,
@@ -38,10 +39,11 @@ def get_nats_url() -> str:
     return os.environ.get("NATS_URL", "nats://localhost:4222")
 
 
-def build_demo_settings(nats_url: str) -> Settings:
+def build_demo_settings(nats_url: str, serializer: str = "JSON") -> Settings:
     """Create standard broker settings for the demo."""
     return Settings(
         transporter=nats_url,
+        serializer=serializer,
         prefer_local=True,
         log_level=os.environ.get("MOLECULERPY_LOG_LEVEL", "INFO"),
     )
@@ -50,12 +52,13 @@ def build_demo_settings(nats_url: str) -> Settings:
 async def create_demo_broker(
     node_id: str = "demo-app",
     nats_url: str | None = None,
+    serializer: str = "JSON",
 ) -> ServiceBroker:
     """Create a broker with demo services and NATS-backed channels."""
     resolved_nats_url = nats_url or get_nats_url()
     broker = ServiceBroker(
         id=node_id,
-        settings=build_demo_settings(resolved_nats_url),
+        settings=build_demo_settings(resolved_nats_url, serializer=serializer),
         middlewares=[
             ChannelsMiddleware(
                 adapter=NatsAdapter(url=resolved_nats_url),
@@ -73,12 +76,13 @@ async def create_demo_broker(
 def create_client_broker(
     node_id: str = "demo-client",
     nats_url: str | None = None,
+    serializer: str = "JSON",
 ) -> ServiceBroker:
     """Create a lightweight client broker for remote action calls."""
     resolved_nats_url = nats_url or get_nats_url()
     return ServiceBroker(
         id=node_id,
-        settings=build_demo_settings(resolved_nats_url),
+        settings=build_demo_settings(resolved_nats_url, serializer=serializer),
     )
 
 

@@ -174,24 +174,29 @@ class ActionLogger(Middleware):
         # Get logger from broker
         self._logger = broker.logger
 
+        if self._logger is None:
+            return
+
+        log = self._logger
+
         # Get log function by level
         if self.log_level == "debug":
-            self._log_fn = self._logger.debug
+            self._log_fn = log.debug
         elif self.log_level == "info":
-            self._log_fn = self._logger.info
+            self._log_fn = log.info
         elif self.log_level == "warn":
-            self._log_fn = self._logger.warning
+            self._log_fn = log.warning
         elif self.log_level == "error":
-            self._log_fn = self._logger.error
+            self._log_fn = log.error
         else:
-            self._log_fn = self._logger.info
+            self._log_fn = log.info
 
         # Create target folder for file logs
         if self.folder:
             node_id = broker.nodeID or "unknown"
             self._target_folder = self.folder / node_id
             self._target_folder.mkdir(parents=True, exist_ok=True)
-            self._logger.info(f"ActionLogger file output: {self._target_folder}")
+            log.info(f"ActionLogger file output: {self._target_folder}")
 
     def _is_whitelisted(self, action_name: str) -> bool:
         """Check if action name matches whitelist.

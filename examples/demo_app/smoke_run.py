@@ -25,10 +25,15 @@ from demo_app.common import (
 )
 
 
-async def run_smoke(nats_url: str) -> None:
+async def run_smoke(nats_url: str, serializer: str = "JSON") -> None:
     """Start demo and client brokers, then verify the full workflow."""
-    app_broker = await create_demo_broker(node_id="demo-app", nats_url=nats_url)
-    client_broker = create_client_broker(node_id="demo-client", nats_url=nats_url)
+    print(f"Serializer: {serializer}")
+    app_broker = await create_demo_broker(
+        node_id="demo-app", nats_url=nats_url, serializer=serializer
+    )
+    client_broker = create_client_broker(
+        node_id="demo-client", nats_url=nats_url, serializer=serializer
+    )
 
     try:
         await app_broker.start()
@@ -63,8 +68,11 @@ def main() -> None:
     """CLI entrypoint for smoke-running the demo application."""
     parser = argparse.ArgumentParser(description="Run the MoleculerPy demo smoke flow")
     parser.add_argument("--nats-url", default=get_nats_url(), help="NATS connection URL")
+    parser.add_argument(
+        "--serializer", default="JSON", choices=["JSON", "MSGPACK"], help="Serializer format"
+    )
     args = parser.parse_args()
-    asyncio.run(run_smoke(args.nats_url))
+    asyncio.run(run_smoke(args.nats_url, serializer=args.serializer))
 
 
 if __name__ == "__main__":

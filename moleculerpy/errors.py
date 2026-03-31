@@ -754,6 +754,27 @@ class BrokerDisconnectedError(MoleculerRetryableError):
         )
 
 
+class SerializationError(MoleculerError):
+    """Raised when serialization or deserialization fails.
+
+    This indicates a problem with encoding/decoding message payloads.
+    Not retryable - the payload itself is malformed or incompatible.
+    """
+
+    def __init__(self, message: str) -> None:
+        """Initialize SerializationError.
+
+        Args:
+            message: Description of the serialization failure
+        """
+        super().__init__(
+            message=message,
+            code=500,
+            error_type="SERIALIZATION_ERROR",
+            retryable=False,
+        )
+
+
 # =============================================================================
 # Error Regenerator
 # =============================================================================
@@ -1019,6 +1040,7 @@ ERROR_REGISTRY: dict[str, type[MoleculerError]] = {
     "GracefulStopTimeoutError": GracefulStopTimeoutError,
     "ProtocolVersionMismatchError": ProtocolVersionMismatchError,
     "InvalidPacketDataError": InvalidPacketDataError,
+    "SerializationError": SerializationError,
 }
 
 
@@ -1047,6 +1069,7 @@ __all__ = [  # noqa: RUF022
     "GracefulStopTimeoutError",
     "ProtocolVersionMismatchError",
     "InvalidPacketDataError",
+    "SerializationError",
     # Registry
     "ERROR_REGISTRY",
     # Regenerator

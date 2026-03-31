@@ -1,13 +1,14 @@
 repos:
+  # ── Commit stage: fast checks ──────────────────────────────
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.10
+    rev: v0.15.0
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: v5.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -15,3 +16,24 @@ repos:
       - id: debug-statements
       - id: check-builtin-literals
       - id: check-case-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+
+  # ── Push stage: thorough checks ────────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        pass_filenames: false
+        entry: mypy moleculerpy/
+        stages: [pre-push]
+
+  - repo: local
+    hooks:
+      - id: pytest-unit
+        name: pytest unit tests
+        entry: /Users/explosovebit/Work/MoleculerPy/.venv/bin/python -m pytest tests/unit/ --tb=no -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        always_run: true

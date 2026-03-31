@@ -7,7 +7,15 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from moleculerpy.packet import Packet, Topic
+from moleculerpy.serializers import JsonSerializer
 from moleculerpy.transporter.nats import NatsTransporter
+
+
+def _mock_transit() -> Mock:
+    """Create a mock transit with a real JsonSerializer."""
+    transit = Mock()
+    transit.serializer = JsonSerializer()
+    return transit
 
 
 class TestNatsTransporter:
@@ -28,7 +36,7 @@ class TestNatsTransporter:
         handler = AsyncMock()
         transporter = NatsTransporter(
             connection_string="nats://localhost:4222",
-            transit=Mock(),
+            transit=_mock_transit(),
             handler=handler,
             node_id="local-node",
         )
@@ -58,7 +66,7 @@ class TestNatsTransporter:
             handler = AsyncMock()
             transporter = NatsTransporter(
                 connection_string="nats://localhost:4222",
-                transit=Mock(),
+                transit=_mock_transit(),
                 handler=handler,
                 node_id="local-node",
             )
@@ -85,7 +93,7 @@ class TestNatsTransporter:
         handler = AsyncMock()
         transporter = NatsTransporter(
             connection_string="nats://localhost:4222",
-            transit=Mock(),
+            transit=_mock_transit(),
             handler=handler,
             node_id="local-node",
         )
@@ -104,7 +112,7 @@ class TestNatsTransporter:
         """Disconnect should wrap nc.close() with timeout to avoid hanging forever."""
         transporter = NatsTransporter(
             connection_string="nats://localhost:4222",
-            transit=Mock(),
+            transit=_mock_transit(),
             handler=AsyncMock(),
             node_id="local-node",
         )
@@ -131,7 +139,7 @@ class TestNatsTransporter:
         """Timeout should keep client reference so caller can retry/inspect cleanup."""
         transporter = NatsTransporter(
             connection_string="nats://localhost:4222",
-            transit=Mock(),
+            transit=_mock_transit(),
             handler=AsyncMock(),
             node_id="local-node",
         )
@@ -153,7 +161,7 @@ class TestNatsTransporter:
         """Unexpected close exception should keep client reference."""
         transporter = NatsTransporter(
             connection_string="nats://localhost:4222",
-            transit=Mock(),
+            transit=_mock_transit(),
             handler=AsyncMock(),
             node_id="local-node",
         )
@@ -176,7 +184,7 @@ class TestNatsTransporter:
         handler = AsyncMock()
         transporter = NatsTransporter(
             connection_string="nats://localhost:4222",
-            transit=Mock(),
+            transit=_mock_transit(),
             handler=handler,
             node_id="local-node",
         )
@@ -189,12 +197,12 @@ class TestNatsTransporter:
         meta = {"packet_type": Topic.INFO}
         called = {"value": False}
 
-        async def fake_to_thread(func):
+        async def fake_to_thread(func, *args):
             called["value"] = True
-            return func()
+            return func(*args)
 
         with pytest.MonkeyPatch.context() as monkeypatch:
-            monkeypatch.setattr("moleculerpy.transporter.nats.asyncio.to_thread", fake_to_thread)
+            monkeypatch.setattr("moleculerpy.serializers.base.asyncio.to_thread", fake_to_thread)
             await transporter.receive("INFO", data, meta)
 
         assert called["value"] is True
