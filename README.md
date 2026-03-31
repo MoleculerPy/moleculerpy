@@ -167,23 +167,27 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 ## Current status (v0.14.3)
 - Core framework with full service lifecycle
 - NATS, Redis, Memory transporters
-- 19 built-in middlewares
+- Pluggable serializers (JSON, MsgPack) — MsgPack 2x faster on large payloads
+- 22 built-in middlewares
 - 5 load balancing strategies
 - Circuit breaker, bulkhead, retry patterns
 - Prometheus metrics & Console tracing
 - Streaming support
+- Protocol v4 safety: version check, NodeID conflict detection
 - REPL & Channels modules
+- Pre-commit hooks (ruff format, ruff check)
 
 ## Planned features
-- MsgPack serializer
+- Balanced request/event handling (NATS queue groups)
+- Transit middleware hook (transitMessageHandler)
+- REST API Gateway (moleculerpy-web)
+- TCP transporter with Gossip protocol
+- Database adapters (moleculerpy-db)
 - LRU cache
-- Metrics Console exporter
 - Jaeger & Zipkin tracing exporters
 - Service versioning (v1.users.get action naming)
 - Kafka transporter
 - AMQP transporter
-- REST API Gateway (moleculerpy-web)
-- Database adapters (moleculerpy-db)
 - GraphQL gateway
 - gRPC support
 

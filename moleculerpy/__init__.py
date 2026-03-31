@@ -21,6 +21,7 @@ from .errors import (
     QueueIsFullError,
     RequestRejectedError,
     RequestTimeoutError,
+    SerializationError,
     ServiceNotAvailableError,
     ServiceNotFoundError,
     ValidationError,
@@ -36,6 +37,7 @@ from .metrics import (
     get_static_metrics,
     get_system_metrics,
 )
+from .serializers import BaseSerializer, JsonSerializer, MsgPackSerializer, resolve_serializer
 from .service import Service
 from .settings import Settings, SettingsValidationError
 from .stream import AsyncStream, StreamError
@@ -83,6 +85,12 @@ __all__ = [  # noqa: RUF022
     "QueueIsFullError",
     "ValidationError",
     "MaxCallLevelError",
+    "SerializationError",
+    # Serializers
+    "BaseSerializer",
+    "JsonSerializer",
+    "MsgPackSerializer",
+    "resolve_serializer",
     # Streaming
     "AsyncStream",
     "StreamError",

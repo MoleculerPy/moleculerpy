@@ -19,16 +19,17 @@ Usage:
 """
 
 import asyncio
-import json
 import logging
 import weakref
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from .base import Transporter
 
 logger = logging.getLogger(__name__)
-JSON_THREAD_OFFLOAD_THRESHOLD = 1024 * 1024
+
+# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
+_PROTOCOL_VERSION: str = "4"
 
 if TYPE_CHECKING:
     from ..packet import Packet
@@ -47,9 +48,10 @@ class _MemoryBus:
 
     def __init__(self) -> None:
         """Initialize the memory bus."""
-        # Type: handler(topic, data) -> Awaitable[None]
+        # Type: handler(topic, data, meta) -> Awaitable[None]
         self._handlers: dict[
-            str, tuple[tuple[Callable[[str, bytes], Awaitable[None]], str], ...]
+            str,
+            tuple[tuple[Callable[[str, bytes, dict[str, Any]], Awaitable[None]], str], ...],
         ] = {}
         # handlers[topic] = ((callback, subscriber_id), ...)
         self._lock = asyncio.Lock()
@@ -61,7 +63,7 @@ class _MemoryBus:
     async def subscribe(
         self,
         topic: str,
-        handler: Callable[[str, bytes], Awaitable[None]],
+        handler: Callable[[str, bytes, dict[str, Any]], Awaitable[None]],
         subscriber_id: str,
     ) -> None:
         """Subscribe to a topic.
@@ -91,12 +93,13 @@ class _MemoryBus:
                 else:
                     del self._handlers[topic]
 
-    async def emit(self, topic: str, data: bytes) -> None:
+    async def emit(self, topic: str, data: bytes, meta: dict[str, Any] | None = None) -> None:
         """Emit a message to all subscribers of a topic.
 
         Args:
             topic: Topic to emit to
             data: Serialized message data
+            meta: Optional metadata dict passed through to handlers
         """
         # Copy-on-write subscriptions let emit read an immutable snapshot
         # without taking the lock on the hot path.
@@ -104,15 +107,17 @@ class _MemoryBus:
         if not handlers:
             return
 
+        emit_meta = meta or {}
         for handler, subscriber_id in handlers:
             try:
 
                 async def invoke_handler(
-                    cb: Callable[[str, bytes], Awaitable[None]] = handler,
+                    cb: Callable[[str, bytes, dict[str, Any]], Awaitable[None]] = handler,
                     msg_topic: str = topic,
                     msg_data: bytes = data,
+                    msg_meta: dict[str, Any] = emit_meta,
                 ) -> None:
-                    await cb(msg_topic, msg_data)
+                    await cb(msg_topic, msg_data, msg_meta)
 
                 # Schedule handler as a task to avoid blocking
                 task: asyncio.Task[None] = asyncio.create_task(
@@ -250,42 +255,6 @@ class MemoryTransporter(Transporter):
         # Built-in balancer means no external balancer needed
         self.has_built_in_balancer = True
 
-    def _serialize(self, payload: dict[str, Any]) -> bytes:
-        """Serialize a payload for transmission.
-
-        Adds protocol version and sender information.
-        Note: Creates a copy to avoid mutating the original payload.
-
-        Args:
-            payload: Dictionary payload to serialize
-
-        Returns:
-            Serialized payload as bytes
-        """
-        # Create copy to avoid mutating original
-        data = {**payload, "ver": "4", "sender": self.node_id}
-        return json.dumps(data).encode("utf-8")
-
-    def _deserialize(self, data: bytes) -> dict[str, Any]:
-        """Deserialize received data.
-
-        Args:
-            data: Serialized message data
-
-        Returns:
-            Deserialized payload dictionary
-        """
-        return cast(dict[str, Any], json.loads(data.decode("utf-8")))
-
-    async def _deserialize_async(self, data: bytes) -> dict[str, Any]:
-        """Deserialize data with optional thread offload for large payloads."""
-        if len(data) > JSON_THREAD_OFFLOAD_THRESHOLD:
-            return cast(
-                dict[str, Any],
-                await asyncio.to_thread(lambda: json.loads(data.decode("utf-8"))),
-            )
-        return self._deserialize(data)
-
     def get_topic_name(self, command: str, node_id: str | None = None) -> str:
         """Generate a topic name for a command.
 
@@ -301,7 +270,7 @@ class MemoryTransporter(Transporter):
             topic += f".{node_id}"
         return topic
 
-    async def _message_handler(self, topic: str, data: bytes) -> None:
+    async def _message_handler(self, topic: str, data: bytes, meta: dict[str, Any]) -> None:
         """Handle incoming messages from the bus.
 
         Routes through middleware chain via receive_with_middleware.
@@ -309,15 +278,17 @@ class MemoryTransporter(Transporter):
         Args:
             topic: Topic the message was received on
             data: Serialized message data
+            meta: Metadata dict containing sender info from publish
         """
         if not self.handler:
             return
 
         try:
-            # Check if it's our own message (peek at sender without full deserialize)
-            # This is an optimization to avoid processing our own broadcasts
-            payload_peek = await self._deserialize_async(data)
-            if payload_peek.get("sender") == self.node_id:
+            # Check if it's our own message via meta (set in send())
+            # This avoids deserializing the payload just to peek at sender,
+            # which is wasteful and breaks if compression/encryption middleware is active.
+            sender = meta.get("sender")
+            if sender == self.node_id:
                 return
 
             # Import here to avoid circular imports
@@ -329,8 +300,8 @@ class MemoryTransporter(Transporter):
                 return
 
             # Pass raw bytes through middleware chain
-            meta = {"topic": topic, "packet_type": packet_type}
-            await self.receive_with_middleware(packet_type.value, data, meta)
+            msg_meta = {"topic": topic, "packet_type": packet_type}
+            await self.receive_with_middleware(packet_type.value, data, msg_meta)
         except Exception as e:
             # Log error but don't crash the message loop
             logger.exception("Error processing message on topic %s: %s", topic, e)
@@ -352,7 +323,7 @@ class MemoryTransporter(Transporter):
         from ..packet import Packet  # noqa: PLC0415
 
         try:
-            payload = await self._deserialize_async(data)
+            payload = await self.transit.serializer.deserialize_async(data)
         except Exception as e:
             logger.exception("Failed to deserialize message: %s", e)
             return
@@ -402,10 +373,11 @@ class MemoryTransporter(Transporter):
             raise RuntimeError("Memory transporter is not connected")
 
         topic = self.get_topic_name(packet.type.value, packet.target)
-        serialized = self._serialize(packet.payload)
+        payload = {**packet.payload, "ver": _PROTOCOL_VERSION, "sender": self.node_id}
+        serialized = await self.transit.serializer.serialize_async(payload)
 
-        # Send through middleware chain
-        meta = {"packet": packet}
+        # Send through middleware chain; include sender for self-echo guard
+        meta = {"packet": packet, "sender": self.node_id}
         await self.send_with_middleware(topic, serialized, meta)
 
     async def send(self, topic: str, data: bytes, meta: dict[str, Any]) -> None:
@@ -423,7 +395,7 @@ class MemoryTransporter(Transporter):
         """
         if not self._connected:
             raise RuntimeError("Memory transporter is not connected")
-        await self.bus.emit(topic, data)
+        await self.bus.emit(topic, data, meta)
 
     async def subscribe(self, command: str, topic: str | None = None) -> None:
         """Subscribe to messages for a specific command.

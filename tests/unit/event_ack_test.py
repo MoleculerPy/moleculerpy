@@ -44,6 +44,7 @@ def mock_settings():
     settings.transporter = "memory://localhost"
     settings.request_timeout = 10.0
     settings.ack_timeout = 5.0
+    settings.serializer = "JSON"
     return settings
 
 
