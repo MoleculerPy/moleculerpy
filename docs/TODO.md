@@ -263,42 +263,86 @@ All README claims have been verified and corrected to match actual implementatio
 
 ---
 
-## P3 — Future features (from Planned Features)
+## Feature Roadmap (linked to Forgeplan PRDs)
 
-- [ ] MsgPack serializer
-- [ ] LRU cache (separate from Memory)
-- [ ] Jaeger & Zipkin tracing exporters
-- [ ] Service versioning (v1.users.get)
-- [ ] Kafka transporter
-- [ ] AMQP transporter
-- [ ] REST API Gateway (moleculer-web port)
+**Full roadmap**: [`.forgeplan/ROADMAP.md`](../../.forgeplan/ROADMAP.md)
+**Quality pipeline**: [`docs/PIPELINE.md`](./PIPELINE.md)
+
+### Done (released)
+
+- [x] MsgPack serializer — v0.14.4, PRD-007
+- [x] Service versioning (v1.users.get) — v0.14.7, PRD-011
+- [x] Pluggable serializer architecture — v0.14.4, PRD-007
+- [x] Transit safety (protocol check, NodeID conflict) — v0.14.4, PRD-006
+- [x] Balanced handling (NATS queue groups) — v0.14.5, PRD-009
+- [x] Transit middleware hooks (4/4) — v0.14.6, PRD-008
+- [x] REST API Gateway (moleculerpy-web 0.1.0b1) — PRD-011-fp
+- [x] CI for all 3 repos — PRD-002
+- [x] PyPI release workflow (OIDC) — PRD-003
+- [x] Root docker-compose.yml (NATS + Redis) — PRD-001 partial
+- [x] Codecov integration — v0.14.4
+
+### Next releases (each = one 0.14.x version)
+
+- [ ] **v0.14.8** — Pluggable metrics system (BaseReporter + Console/Prometheus) → [PRD-012](../../.forgeplan/prds/PRD-012-pluggable-metrics-system.md)
+- [ ] **v0.14.9** — Pluggable validators (BaseValidator ABC) → [PRD-013](../../.forgeplan/prds/PRD-013-pluggable-validator-system.md)
+- [ ] **v0.14.10** — LRU memory cacher → [PRD-014](../../.forgeplan/prds/PRD-014-lru-memory-cacher.md)
+- [ ] **v0.14.11** — Tracing: Jaeger + Zipkin exporters → [PRD-015](../../.forgeplan/prds/PRD-015-tracing-exporters-jaeger-zipkin.md)
+- [ ] **v0.14.12** — REPL completion (10 new commands) → [PRD-004](../../.forgeplan/prds/PRD-004-repl-to-production.md)
+- [ ] **v0.14.13** — MQTT transporter → [PRD-016](../../.forgeplan/prds/PRD-016-mqtt-transporter.md)
+- [ ] **v0.14.14** — AMQP transporter (RabbitMQ) → [PRD-017](../../.forgeplan/prds/PRD-017-amqp-transporter.md)
+- [ ] **v0.14.15** — Kafka transporter → [PRD-018](../../.forgeplan/prds/PRD-018-kafka-transporter.md)
+- [ ] **v0.14.16** — TCP transporter + Gossip → [PRD-010](../../.forgeplan/prds/PRD-010-tcp-transporter-with-gossip-protocol.md)
+- [ ] **v0.14.17** — CBOR + ProtoBuf serializers → [PRD-019](../../.forgeplan/prds/PRD-019-additional-serializers.md)
+
+### Infrastructure (no version, standalone)
+
+- [ ] Production Dockerfile + .dockerignore → [PRD-001](../../.forgeplan/prds/PRD-001-production-deployment-infrastructure.md) **P0**
+- [ ] Dependency locking (uv/poetry) → PRD-001 **P0**
+- [ ] Missing docs: ROADMAP.md, CONTRIBUTING.md, ARCHITECTURE.md → P1
+- [ ] Dependabot / Renovate → P1
+- [ ] Security scanning (pip-audit in CI) → P2
+- [ ] Performance benchmarks in CI → P2
+- [ ] Kubernetes / Helm → P2
+- [ ] moleculerpy-web 0.1.0 stable (Phase 4) → PRD-011-fp P1
+
+### Future (no PRD yet)
+
+- [ ] Avro, Thrift, Notepack serializers
+- [ ] STAN transporter (deprecated upstream)
+- [ ] AMQP 1.0 transporter
 - [ ] Database adapters
 - [ ] GraphQL gateway
 - [ ] gRPC support
 
 ---
 
-## Current state by subproject
+## Current state by subproject (updated 2026-04-03)
 
 ### Core (`moleculerpy/`) — ✅ Production Ready
 
-- 23K lines of code, 1,068 LOC broker
-- 22 middleware, 3 transporters, 5 strategies
+- 23K+ lines of code
+- 22 middleware, 3 transporters, 6 strategies (incl. Shard)
 - 127K calls/sec, 0.008ms latency
-- 1,620 unit tests + 33 E2E + 6 stress
-- Code review score: 9.2/10, all issues closed
+- 1,764 unit + 43 E2E + 8 NATS integration tests
+- mypy strict: 0 errors across 69 files
+- v0.14.7 on PyPI
 
 ### Channels (`moleculerpy-channels/`) — ✅ Production Ready
 
 - 3,568 lines of code
 - Redis + NATS + Fake adapters
 - 0.77ms latency (85% faster than Node.js)
-- 155 tests, 100% pass, 85%+ coverage
-- 98% feature parity with moleculer-channels
+- v0.2.0 on PyPI
 
-### REPL (`moleculerpy-repl/`) — ⚠️ Beta (88%)
+### REPL (`moleculerpy-repl/`) — ⚠️ Beta (9/19 commands)
 
-- 3,596 lines of code
-- 10 commands, multi-worker runner
-- 172 tests, 88% coverage
-- Missing: bench, cache, metrics, load, destroy
+- 3,596 lines of code, 231 tests
+- Missing 10 commands: bench, broadcast, cache, clear, destroy, env, listener, load, metrics, quit
+- v0.2.0 on PyPI
+
+### Web (`moleculerpy-web/`) — ⚠️ Beta
+
+- HTTP gateway with Starlette + uvicorn
+- Phase 3 complete, Phase 4 (stable) pending
+- v0.1.0b1 on PyPI

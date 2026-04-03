@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.8] - 2026-04-03
+
+### Added
+- **Pluggable Metrics Reporter System** (PRD-012)
+  - `moleculerpy.metric_reporters` package with pluggable reporter architecture
+  - `BaseReporter` ABC: `init(registry)`, `stop()`, `metric_changed()`, includes/excludes filtering
+  - `ConsoleReporter`: periodic async metric output to logger (dev mode)
+  - `PrometheusReporter`: `get_text()` pull-based Prometheus exposition format
+  - `MetricRegistry` extended with `add_reporter()`, `stop_reporters()`, `list()` methods
+  - Reporter resolution: `resolve_reporter("console")`, `resolve_reporter({"type": "prometheus"})`
+  - `snapshot()` method on Counter, Gauge, Histogram for structured metric export
+  - 58 unit tests + 4 E2E tests for reporter system
+
+### Fixed
+- **Lock contention in to_prometheus()**: snapshot metric keys under lock, render outside
+  lock to avoid blocking registrations during Prometheus scrape
+- **ConsoleReporter double-init leak**: cancel existing task before creating new one
+- **ConsoleReporter silent no-loop**: log warning when init() called without event loop
+
 ## [0.14.7] - 2026-04-03
 
 ### Added
