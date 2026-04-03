@@ -132,6 +132,11 @@ class ServiceBroker:
         # Initialize cacher (from parameter or settings)
         self.cacher: BaseCacher | None = self._initialize_cacher(cacher)
 
+        # Initialize pluggable validator
+        from .validators import resolve_validator  # noqa: PLC0415
+
+        self._validator = resolve_validator(getattr(self.settings, "validator", "default"))
+
         # Wrapped event methods (set during start() by middleware)
         self._wrapped_emit: (
             Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[Any]] | None
@@ -441,6 +446,10 @@ class ServiceBroker:
         self.logger.info(f"Node ID: {self.nodeID}")
         self.logger.info(f"Transporter: {self.transit.transporter.name}")
 
+        # Initialize validator with broker reference
+        if self._validator is not None:
+            self._validator.init(self)
+
         # Call broker_starting hooks BEFORE connecting
         await self._execute_middleware_hooks("broker_starting", self)
 
@@ -707,15 +716,19 @@ class ServiceBroker:
         Args:
             service: Service instance whose handlers should be wrapped
         """
-        # Wrap action handlers
+        # Wrap action handlers + compile validator checkers
+        svc_key = getattr(service, "full_name", service.name)
         for action in self.registry.__actions__:
-            if action.is_local and action.name.startswith(f"{service.name}."):
+            if action.is_local and action.name.startswith(f"{svc_key}."):
                 if action.handler is not None:
                     action.wrapped_handler = await self.middleware_handler.wrap_handler(
                         "local_action",
                         action.handler,
                         action,
                     )
+                    # Compile validator checker once at registration (Node.js pattern)
+                    if action.params_schema and self._validator is not None:
+                        action._compiled_checker = self._validator.compile(action.params_schema)
                     self.logger.debug(f"Wrapped action handler: {action.name}")
 
         # Wrap event handlers
@@ -855,17 +868,13 @@ class ServiceBroker:
             handler = endpoint.wrapped_handler or endpoint.handler
 
             try:
-                # Validate parameters if schema is defined
-                if endpoint.params_schema:
-                    from .validator import (  # noqa: PLC0415
-                        ValidationError,
-                        validate_params,
-                    )
-
-                    try:
-                        validate_params(context.params, endpoint.params_schema)
-                    except ValidationError:
-                        raise  # Re-raise validation errors
+                # Validate parameters using pre-compiled checker (Node.js pattern:
+                # compile() at registration, checker at call time)
+                if endpoint._compiled_checker is not None:
+                    endpoint._compiled_checker(context.params or {})
+                elif endpoint.params_schema and self._validator is not None:
+                    # Fallback for actions registered before validator init
+                    self._validator.validate(context.params or {}, endpoint.params_schema)
 
                 if handler is None:
                     raise Exception(f"Handler for action {action_name} is None")

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.9] - 2026-04-03
+
+### Added
+- **Pluggable Validator System** (PRD-013)
+  - `moleculerpy.validators` package with pluggable validator architecture
+  - `BaseValidator` ABC: `init(broker)`, `compile(schema)`, `validate(params, schema)`
+  - `BaseValidator.middleware()` returns middleware hooks (Node.js pattern)
+  - `BaseValidator.convert_schema_to_moleculer()` for schema format conversion
+  - `DefaultValidator` wrapping existing validation logic
+  - `resolve_validator()` + `register_validator()` for plugin ecosystem
+  - `Settings(validator=...)` broker option: "default", "none", False, class, instance
+  - Compile-once-validate-many: `compile()` at action registration, checker at call time
+  - Event parameter validation support via middleware hooks
+  - 31 unit tests + 12 E2E tests
+
+### Changed
+- Broker validation: pre-compiled checker at registration time (was inline per-call)
+- Action.__slots__ includes `_compiled_checker` for cached validator
+- Broker `_wrap_service_handlers` uses `service.full_name` for action matching
+
 ## [0.14.8] - 2026-04-03
 
 ### Added
