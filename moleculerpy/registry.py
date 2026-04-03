@@ -66,6 +66,7 @@ class Action:
     """
 
     __slots__ = (
+        "_compiled_checker",  # cached validator checker from compile()
         "_node_ref",  # weakref to Node for strategies
         "cache",
         "cache_ttl",
@@ -117,6 +118,7 @@ class Action:
         self.cache_ttl = cache_ttl
         self.cache = cache
         self._node_ref: weakref.ref[Node] | None = None
+        self._compiled_checker: Callable[..., Any] | None = None
 
     @property
     def node(self) -> Node | None:

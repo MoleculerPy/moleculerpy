@@ -48,7 +48,7 @@ class ConsoleReporter(BaseReporter):
             self._task = None
         try:
             loop = asyncio.get_running_loop()
-            self._task = loop.create_task(self._print_loop())
+            self._task = loop.create_task(self._print_loop(), name="ConsoleReporter._print_loop")
         except RuntimeError:
             self.logger.warning(
                 "ConsoleReporter: no running event loop — periodic printing disabled. "
@@ -79,7 +79,10 @@ class ConsoleReporter(BaseReporter):
         """Periodically print metric summaries."""
         while True:
             await asyncio.sleep(self.interval)
-            self._print_metrics()
+            try:
+                self._print_metrics()
+            except Exception:
+                self.logger.exception("ConsoleReporter: error in _print_metrics")
 
     def _print_metrics(self) -> None:
         """Print current metrics to logger."""

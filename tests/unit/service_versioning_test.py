@@ -55,10 +55,9 @@ class TestGetVersionedFullName:
         assert Service.get_versioned_full_name("api", 100) == "v100.api"
 
     def test_empty_string_version(self) -> None:
-        """Empty string version -> still prepends (edge case)."""
+        """Empty string version -> treated as no version (returns plain name)."""
         result = Service.get_versioned_full_name("users", "")
-        # Empty string is not None, so it prepends: ".users"
-        assert result == ".users"
+        assert result == "users"
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 if TYPE_CHECKING:
     from .cacher.base import BaseCacher, CacherOptions
     from .protocols import LoggerFactoryProtocol, LoggerProtocol
+    from .validators.base import BaseValidator
 
 
 class SettingsValidationError(ValueError):
@@ -82,6 +83,7 @@ class Settings:
         cacher: "bool | str | CacherOptions | BaseCacher | None" = None,
         namespace: str | None = None,
         disable_balancer: bool = False,
+        validator: "str | bool | type[BaseValidator] | BaseValidator | None" = "default",
     ) -> None:
         self.transporter = transporter
         self.serializer = serializer
@@ -100,6 +102,7 @@ class Settings:
         self.cacher = cacher
         self.namespace = namespace
         self.disable_balancer = disable_balancer
+        self.validator = validator
 
         # Validate all settings
         self._validate()
