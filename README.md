@@ -167,7 +167,7 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 
 # Roadmap
 
-## Current status (v0.14.7)
+## Current status (v0.14.8)
 - Core framework with full service lifecycle
 - **Service versioning** — `v1.users.get`, `v2.users.get` coexistence, `$noVersionPrefix`
 - NATS, Redis, Memory transporters
