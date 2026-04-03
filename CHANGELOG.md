@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.10] - 2026-04-04
+
+### Added
+- **LRU Memory Cacher** (PRD-014)
+  - `MemoryLRUCacher` with bounded size and LRU eviction policy
+  - `max` parameter limits cache entries (default: 1000)
+  - Least-recently-used items evicted on overflow (O(1) via OrderedDict)
+  - `get()` updates item recency — frequently accessed items stay cached
+  - `get_with_ttl()` returns `(data, None)` — Node.js compatible
+  - Registered as "MemoryLRU" and "memory-lru" in cacher registry
+  - Warns on unsupported `lock.staleTime` option (Node.js compat)
+  - `max < 1` raises ValueError (prevents infinite eviction loop)
+  - 29 unit tests + 3 E2E tests
+  - Zero new dependencies (stdlib `collections.OrderedDict`)
+
 ## [0.14.9] - 2026-04-03
 
 ### Added
