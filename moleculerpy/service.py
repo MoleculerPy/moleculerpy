@@ -113,11 +113,34 @@ class Service:
         "_extra",
         "broker",
         "dependencies",
+        "full_name",
         "logger",
         "metadata",
         "name",
         "settings",
+        "version",
     )
+
+    @staticmethod
+    def get_versioned_full_name(name: str, version: int | str | None) -> str:
+        """Build a versioned full service name.
+
+        Follows Moleculer.js convention (service.js:835):
+        - Numeric version 2 -> "v2.users"
+        - String version "staging" -> "staging.users"
+        - None -> "users" (unchanged)
+
+        Args:
+            name: Service name (e.g. "users")
+            version: Version number or string, or None
+
+        Returns:
+            Versioned full name (e.g. "v2.users") or plain name
+        """
+        if version is not None:
+            prefix = f"v{version}" if isinstance(version, int) else str(version)
+            return f"{prefix}.{name}"
+        return name
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Allow dynamic service state while keeping a fixed-slot core layout."""
@@ -166,7 +189,7 @@ class Service:
             class_schema["name"] = name
 
         version = cls.__dict__.get("version")
-        if isinstance(version, str) and version:
+        if isinstance(version, int) or (isinstance(version, str) and version):
             class_schema["version"] = version
 
         # settings, metadata, hooks must be dicts
@@ -223,6 +246,14 @@ class Service:
             cls._merged_schema = class_schema
             cls._lifecycle_handlers = {}
 
+            # Propagate class-level attributes even without mixins
+            if "settings" in class_schema:
+                cls._class_settings = class_schema["settings"]
+            if "metadata" in class_schema:
+                cls._class_metadata = class_schema["metadata"]
+            if "dependencies" in class_schema:
+                cls._class_dependencies = class_schema["dependencies"]
+
     def __init__(
         self,
         name: str | None = None,
@@ -248,6 +279,16 @@ class Service:
             class_name = ""
         self.name: str = name or class_name or cls.__name__.lower()
 
+        # Version: from merged schema (supports int and str)
+        merged_schema = getattr(cls, "_merged_schema", {})
+        raw_version = merged_schema.get("version") if isinstance(merged_schema, dict) else None
+        self.version: int | str | None = raw_version
+
+        # Full name: versioned service name (e.g. "v2.users")
+        # Respects $noVersionPrefix setting (checked after settings merge below)
+        # Will be finalized after settings are merged
+        self.full_name: str = self.name  # Temporary, finalized below
+
         # Settings: merge class-level (from mixins) + instance arg
         # Use _class_settings which contains merged mixin + class settings
         class_settings = getattr(cls, "_class_settings", None)
@@ -256,6 +297,13 @@ class Service:
             raw = cls.__dict__.get("settings")
             class_settings = raw if isinstance(raw, dict) else {}
         self.settings: dict[str, Any] = merge_settings(class_settings, settings or {})
+
+        # Finalize full_name now that settings are available
+        # Node.js: settings.$noVersionPrefix suppresses version prefix
+        effective_version = (
+            self.version if not self.settings.get("$noVersionPrefix", False) else None
+        )
+        self.full_name = Service.get_versioned_full_name(self.name, effective_version)
 
         # Metadata: from class-level (already merged in __init_subclass__)
         class_metadata = getattr(cls, "_class_metadata", None)

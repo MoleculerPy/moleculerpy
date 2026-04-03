@@ -1110,10 +1110,12 @@ class Transit:
         services = self._broker.registry.__services__
 
         for service in services.values():
-            # Subscribe balanced requests for each action
+            # Subscribe balanced requests for each action (using full_name for versioned services)
+            _fn = getattr(service, "full_name", None)
+            svc_full_name = _fn if isinstance(_fn, str) else service.name
             for action_name in service.actions():
                 handler = getattr(service, action_name)
-                full_name = f"{service.name}.{getattr(handler, '_name', action_name)}"
+                full_name = f"{svc_full_name}.{getattr(handler, '_name', action_name)}"
                 await self.transporter.subscribe_balanced_request(full_name)
 
             # Subscribe balanced events for each event

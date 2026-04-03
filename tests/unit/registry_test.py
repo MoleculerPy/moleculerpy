@@ -108,6 +108,8 @@ class TestRegistry:
         # Create mock service
         service = MagicMock()
         service.name = "test-service"
+        service.full_name = "test-service"
+        service.settings = {}
 
         # Mock actions
         action1 = Mock()
@@ -399,6 +401,8 @@ class TestRegistry:
 
         service = MagicMock()
         service.name = "test-service"
+        service.full_name = "test-service"
+        service.settings = {}
         service.actions.return_value = []
 
         event_method = Mock()
@@ -419,6 +423,8 @@ class TestRegistry:
 
         service = MagicMock()
         service.name = "test-service"
+        service.full_name = "test-service"
+        service.settings = {}
         service.actions.return_value = []
 
         event1 = Mock()
@@ -615,6 +621,8 @@ class TestCascadeCleanup:
 
         service = MagicMock()
         service.name = "svc"
+        service.full_name = "svc"
+        service.settings = {}
         service.node_id = "node-1"
         service.actions.return_value = []
         service.events.return_value = []

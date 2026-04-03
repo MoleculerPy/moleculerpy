@@ -255,6 +255,14 @@ class NodeCatalog:
             return
 
         for service in node.services:
+            # Reconstruct fullName if missing (Node.js registry.js:198 compat)
+            if not service.get("fullName"):
+                from moleculerpy.service import Service  # noqa: PLC0415
+
+                service["fullName"] = Service.get_versioned_full_name(
+                    service.get("name", ""),
+                    service.get("version"),
+                )
             actions = service.get("actions", {})
             for action_name in actions:
                 action_obj = Action(name=action_name, node_id=node_id, is_local=False)
@@ -455,20 +463,25 @@ class NodeCatalog:
         # Build service definitions from registry
         self.local_node.services = []
         for service in self.registry.__services__.values():
+            _fn = getattr(service, "full_name", None)
+            svc_full_name = _fn if isinstance(_fn, str) else service.name
             service_definition: dict[str, Any] = {
                 "name": service.name,
-                "fullName": service.name,
+                "version": getattr(service, "version", None),
+                "fullName": svc_full_name,
                 "settings": service.settings,
                 "metadata": service.metadata,
                 "actions": {},
                 "events": {},
             }
 
-            # Add actions
-            for action in service.actions():
-                action_name = f"{service.name}.{action}"
+            # Add actions using full_name for versioned action names
+            for action_method in service.actions():
+                handler = getattr(service, action_method)
+                raw_name = getattr(handler, "_name", action_method)
+                action_name = f"{svc_full_name}.{raw_name}"
                 service_definition["actions"][action_name] = {
-                    "rawName": action,
+                    "rawName": raw_name,
                     "name": action_name,
                 }
 
