@@ -351,6 +351,7 @@ class TestMakeBalancedSubscriptions:
         # Create mock service with actions
         service = MagicMock()
         service.name = "math"
+        service.full_name = "math"
         action_handler = MagicMock()
         action_handler._is_action = True
         action_handler._name = "add"
@@ -398,6 +399,7 @@ class TestMakeBalancedSubscriptions:
         # Create mock service with events
         service = MagicMock()
         service.name = "users"
+        service.full_name = "users"
         event_handler = MagicMock()
         event_handler._is_event = True
         event_handler._name = "user.created"

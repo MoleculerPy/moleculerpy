@@ -167,14 +167,15 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 
 # Roadmap
 
-## Current status (v0.14.6)
+## Current status (v0.14.7)
 - Core framework with full service lifecycle
+- **Service versioning** — `v1.users.get`, `v2.users.get` coexistence, `$noVersionPrefix`
 - NATS, Redis, Memory transporters
 - Pluggable serializers (JSON, MsgPack) — MsgPack 2x faster on large payloads
 - Balanced request/event handling via NATS queue groups (`disable_balancer=True`)
 - 4/4 transit middleware hooks (publish, send, receive, message handler)
 - 22 built-in middlewares
-- 5 load balancing strategies
+- 6 load balancing strategies (including Shard)
 - Circuit breaker, bulkhead, retry patterns
 - Prometheus metrics & Console tracing
 - Streaming support

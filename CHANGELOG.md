@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.7] - 2026-04-03
+
+### Added
+- **Service Versioning** (PRD-011)
+  - `Service.version` attribute (int or str): `version = 2` → actions as `v2.users.get`
+  - `Service.full_name` property: `"v2.users"` for versioned, `"users"` for plain
+  - `Service.get_versioned_full_name()` static method (Node.js `service.js:835` compatible)
+  - Multiple versions of same service coexist in registry: v1.users + v2.users
+  - `$noVersionPrefix` setting suppresses version prefix
+  - `$noServiceNamePrefix` setting removes service name prefix from action names
+  - INFO packets include `version` and `fullName` fields per service
+  - Remote node `fullName` reconstruction for backward compatibility
+  - Wire protocol compatible with Node.js Moleculer versioned services
+
+### Fixed
+- **Settings propagation bug**: class-level `settings`, `metadata`, `dependencies` on
+  services without mixins were not propagated to instances (pre-existing bug found during
+  versioning work)
+- **INFO action names**: `ensure_local_node()` now uses `handler._name` for action names
+  (consistent with registry), not Python method names
+- **version=0 handling**: numeric version `0` is now correctly treated as valid (not falsy)
+
+### Changed
+- `MixinSchema.version` type: `str` → `int | str` (supports numeric versions)
+- Registry keys services by `full_name` instead of `name`
+
 ## [0.14.6] - 2026-03-31
 
 ### Added
