@@ -40,8 +40,9 @@ class BaseReporter(ABC):
         """Initialize reporter with registry reference."""
         self.registry = registry
 
-    async def stop(self) -> None:  # noqa: B027
+    async def stop(self) -> None:
         """Stop reporter and release resources. Override for cleanup."""
+        return  # Default no-op; subclasses override for cleanup
 
     def match_metric_name(self, name: str) -> bool:
         """Check if a metric name passes the includes/excludes filters."""
@@ -74,6 +75,17 @@ _REPORTER_REGISTRY: dict[str, type[BaseReporter]] = {}
 def register_reporter(name: str, cls: type[BaseReporter]) -> None:
     """Register a reporter class by name for string-based resolution."""
     _REPORTER_REGISTRY[name.lower()] = cls
+
+
+def _reset_reporter_registry() -> None:
+    """Reset reporter registry to built-in reporters only. For testing."""
+    _REPORTER_REGISTRY.clear()
+    # Re-register builtins (imported modules call register_reporter at import time)
+    from moleculerpy.metric_reporters.console import ConsoleReporter  # noqa: PLC0415
+    from moleculerpy.metric_reporters.prometheus import PrometheusReporter  # noqa: PLC0415
+
+    _REPORTER_REGISTRY["console"] = ConsoleReporter
+    _REPORTER_REGISTRY["prometheus"] = PrometheusReporter
 
 
 def resolve_reporter(

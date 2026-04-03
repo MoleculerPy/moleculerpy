@@ -18,6 +18,7 @@ This test validates:
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -63,11 +64,11 @@ class UserServiceV1(Service):
     version = 1
 
     @action()
-    async def get(self, ctx) -> dict:  # type: ignore[no-untyped-def]
+    async def get(self, ctx: Any) -> dict:
         return {"version": 1, "id": ctx.params.get("id", 0), "name": "alice"}
 
     @action()
-    async def info(self, ctx) -> dict:  # type: ignore[no-untyped-def]
+    async def info(self, ctx: Any) -> dict:
         return {"api": "v1", "node": self.broker.nodeID if self.broker else "unknown"}
 
 
@@ -78,7 +79,7 @@ class UserServiceV2(Service):
     version = 2
 
     @action()
-    async def get(self, ctx) -> dict:  # type: ignore[no-untyped-def]
+    async def get(self, ctx: Any) -> dict:
         return {
             "version": 2,
             "user": {
@@ -89,7 +90,7 @@ class UserServiceV2(Service):
         }
 
     @action()
-    async def info(self, ctx) -> dict:  # type: ignore[no-untyped-def]
+    async def info(self, ctx: Any) -> dict:
         return {"api": "v2", "node": self.broker.nodeID if self.broker else "unknown"}
 
 
@@ -99,7 +100,7 @@ class HealthService(Service):
     name = "health"
 
     @action()
-    async def check(self, ctx) -> dict:  # type: ignore[no-untyped-def]
+    async def check(self, ctx: Any) -> dict:
         return {"status": "ok", "node": self.broker.nodeID if self.broker else "unknown"}
 
 

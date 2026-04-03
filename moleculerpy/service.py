@@ -137,7 +137,7 @@ class Service:
         Returns:
             Versioned full name (e.g. "v2.users") or plain name
         """
-        if version is not None:
+        if version is not None and version != "":
             prefix = f"v{version}" if isinstance(version, int) else str(version)
             return f"{prefix}.{name}"
         return name
@@ -342,11 +342,12 @@ class Service:
         Returns:
             List of method names that are marked as actions
         """
-        return [
-            attr
-            for attr in dir(self)
-            if callable(getattr(self, attr)) and getattr(getattr(self, attr), "_is_action", False)
-        ]
+        result: list[str] = []
+        for attr in dir(self):
+            obj = getattr(self, attr, None)
+            if obj is not None and callable(obj) and getattr(obj, "_is_action", False):
+                result.append(attr)
+        return result
 
     def events(self) -> list[str]:
         """Get a list of all event handler method names in this service.
@@ -354,11 +355,12 @@ class Service:
         Returns:
             List of method names that are marked as event handlers
         """
-        return [
-            attr
-            for attr in dir(self)
-            if callable(getattr(self, attr)) and getattr(getattr(self, attr), "_is_event", False)
-        ]
+        result: list[str] = []
+        for attr in dir(self):
+            obj = getattr(self, attr, None)
+            if obj is not None and callable(obj) and getattr(obj, "_is_event", False):
+                result.append(attr)
+        return result
 
     def has_lifecycle_hook(self, hook_name: str) -> bool:
         """Check if this service has a specific lifecycle hook defined.
