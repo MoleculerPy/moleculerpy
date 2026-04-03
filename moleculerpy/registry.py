@@ -276,15 +276,27 @@ class Registry:
         Args:
             service: Service instance to register
         """
-        self.__services__[service.name] = service
+        # Use full_name as key to support versioned services (e.g. "v2.users")
+        full = getattr(service, "full_name", None)
+        service_key = full if isinstance(full, str) else service.name
+        self.__services__[service_key] = service
         local_node_id = self.__node_id__ if self.__node_id__ is not None else NodeID("unknown")
 
-        # Register service actions
+        # Register service actions using full_name for versioned action names
+        # Node.js: $noServiceNamePrefix skips the "fullName." prefix
+        svc_settings = getattr(service, "settings", None)
+        no_svc_prefix = (
+            svc_settings.get("$noServiceNamePrefix", False)
+            if isinstance(svc_settings, dict)
+            else False
+        )
         service_actions = []
         for action_name in service.actions():
             handler = getattr(service, action_name)
+            raw_name = getattr(handler, "_name", action_name)
+            qualified_name = raw_name if no_svc_prefix else f"{service_key}.{raw_name}"
             action_obj = Action(
-                name=f"{service.name}.{getattr(handler, '_name', action_name)}",
+                name=qualified_name,
                 node_id=local_node_id,
                 is_local=True,
                 handler=handler,

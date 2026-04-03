@@ -153,10 +153,19 @@ class TestNodeCatalog:
         # Create mock services
         service1 = Mock()
         service1.name = "user-service"
+        service1.full_name = "user-service"
         service1.settings = {"timeout": 5000}
         service1.metadata = {"version": "1.0"}
         service1.actions.return_value = ["create", "update"]
         service1.events.return_value = ["created", "updated"]
+
+        # Mock action handlers with _name attributes
+        create_action = Mock()
+        create_action._name = "create"
+        update_action = Mock()
+        update_action._name = "update"
+        service1.create = create_action
+        service1.update = update_action
 
         # Mock event attributes
         created_event = Mock()
@@ -170,10 +179,14 @@ class TestNodeCatalog:
 
         service2 = Mock()
         service2.name = "auth-service"
+        service2.full_name = "auth-service"
         service2.settings = {}
         service2.metadata = {}
         service2.actions.return_value = ["login"]
         service2.events.return_value = []
+        login_action = Mock()
+        login_action._name = "login"
+        service2.login = login_action
 
         mock_registry.__services__ = {"user-service": service1, "auth-service": service2}
 
@@ -340,7 +353,7 @@ class TestNodeCatalog:
         assert node.id == "new-node"
         assert node.available is True
         assert node.cpu == 35.5
-        assert node.services == [{"name": "test-service"}]
+        assert node.services == [{"name": "test-service", "fullName": "test-service"}]
 
         # Check logging
         info_calls = [str(call) for call in mock_logger.info.call_args_list]
@@ -368,7 +381,9 @@ class TestNodeCatalog:
         assert node == existing_node  # Same instance
         assert node.available is True  # Updated
         assert node.cpu == 50.0  # Updated
-        assert node.services == [{"name": "updated-service"}]  # Updated
+        assert node.services == [
+            {"name": "updated-service", "fullName": "updated-service"}
+        ]  # Updated
 
         # Should only log connection, not addition
         info_calls = [str(call) for call in mock_logger.info.call_args_list]

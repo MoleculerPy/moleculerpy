@@ -91,7 +91,7 @@ class MixinSchema(TypedDict, total=False):
     """Schema for mixin definitions (Moleculer.js compatible)."""
 
     name: str
-    version: str
+    version: int | str
     settings: dict[str, Any]
     metadata: dict[str, Any]
     actions: dict[str, Any]
