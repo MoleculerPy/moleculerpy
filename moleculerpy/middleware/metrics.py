@@ -122,6 +122,17 @@ class BaseMetric(ABC):
 
         return tuple(labels[name] for name in self.label_names)
 
+    def snapshot(self) -> dict[str, Any]:
+        """Return a serializable snapshot of this metric's current state.
+
+        Used by reporters (e.g., ConsoleReporter) to emit structured data.
+        """
+        return {
+            "name": self.name,
+            "type": type(self).__name__.lower(),
+            "description": self.description,
+        }
+
     @abstractmethod
     def _to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format lines."""
@@ -192,6 +203,13 @@ class Counter(BaseMetric):
         key = self._validate_labels(labels)
         with self._lock:
             return self._values.get(key, 0.0)
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return serializable counter snapshot."""
+        base = super().snapshot()
+        with self._lock:
+            base["values"] = dict(self._values)
+        return base
 
     def _to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format."""
@@ -307,6 +325,13 @@ class Gauge(BaseMetric):
         key = self._validate_labels(labels)
         with self._lock:
             return self._values.get(key, 0.0)
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return serializable gauge snapshot."""
+        base = super().snapshot()
+        with self._lock:
+            base["values"] = dict(self._values)
+        return base
 
     def _to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format."""
@@ -438,6 +463,15 @@ class Histogram(BaseMetric):
         with self._lock:
             data = self._data.get(key)
             return data.sum if data else 0.0
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return serializable histogram snapshot."""
+        base = super().snapshot()
+        with self._lock:
+            base["values"] = {
+                str(k): {"count": d.count, "sum": d.sum} for k, d in self._data.items()
+            }
+        return base
 
     def _to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format."""
@@ -607,13 +641,15 @@ class MetricRegistry:
         Returns:
             Multi-line string in Prometheus exposition format
         """
-        lines: list[str] = []
-
+        # Snapshot metric references under lock, render outside lock
+        # to avoid holding registry lock during per-metric serialization
         with self._lock:
-            for name in sorted(self._metrics.keys()):
-                metric = self._metrics[name]
-                lines.extend(metric._to_prometheus_lines())
-                lines.append("")  # Blank line between metrics
+            snapshot = sorted(self._metrics.items())
+
+        lines: list[str] = []
+        for _name, metric in snapshot:
+            lines.extend(metric._to_prometheus_lines())
+            lines.append("")  # Blank line between metrics
 
         return "\n".join(lines)
 
