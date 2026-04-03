@@ -6,7 +6,7 @@ following Moleculer.js patterns with Pythonic implementation.
 Available backends:
     - MemoryCacher: In-memory cache with TTL (default)
     - RedisCacher: Distributed Redis cache (production)
-    - (Future) MemoryLRUCacher: LRU eviction with max size
+    - MemoryLRUCacher: LRU eviction with max size (v0.14.10)
 
 Usage:
     >>> from moleculerpy.cacher import MemoryCacher, RedisCacher, resolve
@@ -39,6 +39,7 @@ from .base import (
     Params,
 )
 from .memory import MemoryCacher
+from .memory_lru import MemoryLRUCacher
 from .redis import RedisCacher
 
 if TYPE_CHECKING:
@@ -48,6 +49,8 @@ if TYPE_CHECKING:
 _CACHER_REGISTRY: dict[str, type[BaseCacher]] = {
     "memory": MemoryCacher,
     "Memory": MemoryCacher,
+    "MemoryLRU": MemoryLRUCacher,
+    "memory-lru": MemoryLRUCacher,
     "redis": RedisCacher,
     "Redis": RedisCacher,
 }
@@ -118,6 +121,7 @@ __all__ = [  # noqa: RUF022
     # Classes
     "BaseCacher",
     "MemoryCacher",
+    "MemoryLRUCacher",
     "RedisCacher",
     "CacheItem",
     "CacherOptions",
