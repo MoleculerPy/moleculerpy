@@ -485,13 +485,28 @@ class ServiceBroker:
                 if isinstance(strategy, LatencyStrategy):
                     strategy.set_latency_provider(self.latency_monitor)
 
+        # Register $node internal service (always available, Moleculer.js compatible).
+        # Registered directly into registry without middleware lifecycle hooks since
+        # this is a built-in introspection service, not a user service.
+        from .internals import NodeInternalService  # noqa: PLC0415
+
+        if "$node" not in self.registry.__services__:
+            _node_svc = NodeInternalService()
+            _node_svc.broker = self
+            _node_svc.logger = self._create_logger("$node")
+            self.registry.register(_node_svc)
+
         service_count = len(self.registry.__services__)
         self.logger.info(f"Service broker with {service_count} services started successfully")
 
         # Start all services in parallel (Moleculer.js-compatible Promise.all pattern).
         # TaskGroup cancels remaining services on first failure (stricter than JS Promise.all).
         # Re-raise the first sub-exception to match Moleculer.js Promise.all behavior.
-        services = list(self.registry.__services__.values())
+        # Internal services (name starts with "$") are excluded from lifecycle hooks —
+        # they are always-available introspection services, not user services.
+        services = [
+            svc for svc in self.registry.__services__.values() if not svc.name.startswith("$")
+        ]
         if services:
             try:
                 async with asyncio.TaskGroup() as tg:
@@ -514,8 +529,11 @@ class ServiceBroker:
             # Call broker_stopping hooks BEFORE disconnecting (reverse order for LIFO cleanup)
             await self._execute_middleware_hooks("broker_stopping", self, reverse=True)
 
-            # Call stopped() lifecycle hooks on all registered services (reverse order)
-            services = list(self.registry.__services__.values())
+            # Call stopped() lifecycle hooks on user services (reverse order).
+            # Internal services (name starts with "$") are excluded.
+            services = [
+                svc for svc in self.registry.__services__.values() if not svc.name.startswith("$")
+            ]
             for service in reversed(services):
                 # Call service_stopping middleware hooks first
                 await self._execute_middleware_hooks("service_stopping", service, reverse=True)
@@ -942,6 +960,51 @@ class ServiceBroker:
 
         return await self.transit.request_without_endpoint(str(action_name), context, timeout)
 
+    async def mcall(
+        self,
+        definitions: list[dict[str, Any]] | dict[str, dict[str, Any]],
+        settled: bool = False,
+    ) -> list[Any] | dict[str, Any]:
+        """Call multiple actions in parallel.
+
+        Node.js equivalent: service-broker.js mcall()
+
+        Args:
+            definitions: Either:
+                - list of {"action": str, "params": dict, "meta": dict} dicts
+                  → returns list of results in same order
+                - dict of {name: {"action": str, "params": dict, "meta": dict}}
+                  → returns dict of {name: result}
+            settled: If True, exceptions are returned as values instead of raised
+                     (like Promise.allSettled). If False, first failure raises.
+
+        Returns:
+            List or dict of results matching input format.
+        """
+        if isinstance(definitions, list):
+            tasks = [
+                self.call(
+                    d["action"],
+                    params=d.get("params"),
+                    meta=d.get("meta"),
+                )
+                for d in definitions
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=settled)
+            return list(results)
+        else:
+            names = list(definitions.keys())
+            tasks = [
+                self.call(
+                    definitions[name]["action"],
+                    params=definitions[name].get("params"),
+                    meta=definitions[name].get("meta"),
+                )
+                for name in names
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=settled)
+            return dict(zip(names, results, strict=False))
+
     async def _emit_core(
         self,
         event_name: str,
@@ -1130,6 +1193,105 @@ class ServiceBroker:
 
         # Fallback to core implementation (before start() or no middleware)
         return await self._broadcast_core(event_name, params, meta, groups)
+
+    async def ping(
+        self,
+        node_id: str | None = None,
+        timeout: float = 2.0,
+    ) -> dict[str, Any] | None:
+        """Ping a remote node and measure round-trip time.
+
+        Node.js equivalent: service-broker.js ping()
+
+        Args:
+            node_id: Target node ID to ping, or None to ping all remote nodes.
+            timeout: Maximum wait time in seconds for pong response(s).
+
+        Returns:
+            For single node: dict with keys "nodeID", "time" (RTT ms), "timeDiff"
+                or None if no pong received within timeout.
+            For all nodes: dict of {nodeID: pong_data | None}
+        """
+        if node_id is not None:
+            return await self._ping_node(node_id, timeout)
+
+        # Ping all remote available nodes in parallel
+        nodes = {
+            nid: node
+            for nid, node in self.node_catalog.nodes.items()
+            if nid != self.nodeID and node.available
+        }
+        if not nodes:
+            return {}
+
+        tasks = {nid: self._ping_node(nid, timeout) for nid in nodes}
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        return {
+            nid: (result if not isinstance(result, BaseException) else None)
+            for nid, result in zip(tasks.keys(), results, strict=False)
+        }
+
+    async def _ping_node(self, node_id: str, timeout: float) -> dict[str, Any] | None:
+        """Send a PING to a single node and wait for PONG.
+
+        Follows Moleculer.js pattern: broker.ping() listens to "$node.pong" on
+        localBus, which transit emits upon receiving a PONG packet.
+
+        Args:
+            node_id: Target node ID
+            timeout: Wait timeout in seconds
+
+        Returns:
+            Pong data dict or None on timeout
+        """
+        import time as _time  # noqa: PLC0415
+        import uuid  # noqa: PLC0415
+
+        from .packet import Packet, Topic  # noqa: PLC0415
+
+        ping_id = str(uuid.uuid4())
+        sent_ms = _time.time() * 1000
+        pong_event = asyncio.Event()
+        pong_result: dict[str, Any] = {}
+
+        async def _on_pong(payload: Any) -> None:
+            data = payload if isinstance(payload, dict) else {}
+            # Filter by ping_id and nodeID to avoid collisions
+            if data.get("id") == ping_id and data.get("nodeID") == node_id:
+                pong_result["nodeID"] = node_id
+                pong_result["time"] = data.get("elapsedTime", 0.0)
+                pong_result["timeDiff"] = data.get("timeDiff", 0)
+                pong_event.set()
+
+        self.local_bus.on("$node.pong", _on_pong)
+
+        try:
+            await self.transit.publish(
+                Packet(
+                    Topic.PING,
+                    node_id,
+                    {"id": ping_id, "time": sent_ms, "sender": self.nodeID},
+                )
+            )
+            try:
+                await asyncio.wait_for(pong_event.wait(), timeout=timeout)
+            except TimeoutError:
+                return None
+            return dict(pong_result)
+        finally:
+            self.local_bus.off("$node.pong", _on_pong)
+
+    def get_health_status(self) -> dict[str, Any]:
+        """Get current system health information.
+
+        Node.js equivalent: health.js getHealthStatus()
+
+        Returns:
+            Dict with keys: cpu, mem, os, process, client, net, time
+        """
+        from .health import get_health_status as _get_health  # noqa: PLC0415
+
+        return _get_health()
 
 
 # Backwards compatibility alias
