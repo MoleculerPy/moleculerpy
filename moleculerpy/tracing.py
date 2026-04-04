@@ -32,9 +32,12 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -485,13 +488,18 @@ class Tracer:
         if self.logger:
             self.logger.info(f"Tracer initialized with {len(self.exporters)} exporter(s)")
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """Stop the tracer and cleanup exporters.
 
-        Called during broker shutdown.
+        Called during broker shutdown. Supports both sync and async stop() on exporters.
         """
+        import inspect  # noqa: PLC0415
+
         for exp in self.exporters:
-            exp.stop()
+            if inspect.iscoroutinefunction(exp.stop):
+                await exp.stop()
+            else:
+                exp.stop()
 
         self.exporters.clear()
 
@@ -993,6 +1001,314 @@ class EventExporter(BaseTraceExporter):
 
 
 # =============================================================================
+# Zipkin Exporter
+# =============================================================================
+
+
+class ZipkinExporter(BaseTraceExporter):
+    """Exporter that sends spans to Zipkin via HTTP API v2.
+
+    Batches finished spans and periodically flushes them to a Zipkin
+    server using the standard v2 JSON format. Uses only stdlib (urllib)
+    — no extra dependencies required.
+
+    Args:
+        base_url: Zipkin base URL (default: "http://localhost:9411")
+        interval: Flush interval in seconds (default: 5.0)
+        default_tags: Tags added to every span (default: None)
+        headers: Extra HTTP headers (default: None)
+
+    Example:
+        tracer = Tracer(broker, TracerOptions(
+            exporter=[ZipkinExporter(base_url="http://zipkin:9411")]
+        ))
+    """
+
+    __slots__ = (
+        "_flush_task",
+        "_lock",
+        "_queue",
+        "base_url",
+        "default_tags",
+        "headers",
+        "interval",
+    )
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:9411",
+        interval: float = 5.0,
+        default_tags: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        """Initialize ZipkinExporter.
+
+        Args:
+            base_url: Zipkin base URL
+            interval: Flush interval in seconds
+            default_tags: Tags added to every span
+            headers: Extra HTTP headers
+        """
+        super().__init__()
+        self.base_url: str = base_url
+        self.interval: float = float(interval)
+        self.default_tags: dict[str, Any] | None = default_tags
+        self.headers: dict[str, str] | None = headers
+        self._queue: list[Span] = []
+        self._lock = threading.Lock()
+        self._flush_task: asyncio.Task[None] | None = None
+
+    def init(self, tracer: Tracer) -> None:
+        """Start periodic flush task.
+
+        Args:
+            tracer: The Tracer instance
+        """
+        super().init(tracer)
+        try:
+            loop = asyncio.get_running_loop()
+            self._flush_task = loop.create_task(self._periodic_flush())
+        except RuntimeError:
+            pass
+
+    async def stop(self) -> None:  # type: ignore[override]
+        """Cancel timer and flush remaining spans."""
+        if self._flush_task is not None and not self._flush_task.done():
+            self._flush_task.cancel()
+            self._flush_task = None
+        await self.flush()
+
+    def span_started(self, span: Span) -> None:
+        """No-op — spans collected on finish.
+
+        Args:
+            span: The started span
+        """
+        return None
+
+    def span_finished(self, span: Span) -> None:
+        """Queue finished span for export.
+
+        Args:
+            span: The finished span
+        """
+        with self._lock:
+            self._queue.append(span)
+
+    async def _periodic_flush(self) -> None:
+        """Periodically flush queued spans."""
+        while True:
+            try:
+                await asyncio.sleep(self.interval)
+                await self.flush()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if self.logger:
+                    self.logger.warn(f"ZipkinExporter periodic flush error: {e}")
+
+    async def flush(self) -> None:
+        """Drain queue and POST spans to Zipkin."""
+        with self._lock:
+            if not self._queue:
+                return
+            spans = self._queue.copy()
+            self._queue.clear()
+
+        payload = [self._make_payload(span) for span in spans]
+        self._post(payload)
+
+    def _make_payload(self, span: Span) -> dict[str, Any]:
+        """Convert a Span to Zipkin v2 JSON format.
+
+        Args:
+            span: The span to convert
+
+        Returns:
+            Zipkin v2 span dict
+        """
+        tags: dict[str, str] = {}
+        if self.default_tags:
+            tags.update({k: str(v) for k, v in self.default_tags.items()})
+        flat = self.flatten_tags(span.tags, convert_to_string=True)
+        tags.update({k: str(v) for k, v in flat.items()})
+
+        service_name = "unknown"
+        if isinstance(span.service, dict):
+            service_name = str(span.service.get("name", "unknown"))
+        elif span.service:
+            service_name = str(span.service)
+
+        annotations = [
+            {
+                "value": log.name,
+                "timestamp": round(log.time * 1_000_000),
+            }
+            for log in span.logs
+        ]
+
+        parent_id = self._convert_id(span.parent_id) if span.parent_id else None
+
+        result: dict[str, Any] = {
+            "traceId": self._convert_id(span.trace_id),
+            "id": self._convert_id(span.id),
+            "name": span.name,
+            "timestamp": round(span.start_time * 1_000_000),
+            "duration": round(span.duration * 1_000_000),
+            "localEndpoint": {"serviceName": service_name},
+            "tags": tags,
+            "annotations": annotations,
+            "parentId": parent_id,
+        }
+
+        span_type = span.type.upper() if span.type else ""
+        if span_type in ("ACTION", "REQUEST"):
+            result["kind"] = "CLIENT"
+        else:
+            result["kind"] = "SERVER"
+
+        return result
+
+    @staticmethod
+    def _convert_id(uid: str | None, length: int = 16) -> str | None:
+        """Strip dashes from a UUID/hex string.
+
+        The ``length`` parameter is accepted for API compatibility but is
+        treated as a hint only — no truncation or padding is applied.
+
+        Args:
+            uid: UUID or raw hex string, or None/empty string
+            length: Ignored (kept for subclass compatibility)
+
+        Returns:
+            Hex string without dashes, ``None`` if *uid* is ``None``,
+            or ``""`` if *uid* is an empty string.
+        """
+        if uid is None:
+            return None
+        if uid == "":
+            return ""
+        return uid.replace("-", "")
+
+    def _post(self, payload: list[dict[str, Any]]) -> None:
+        """HTTP POST payload to Zipkin /api/v2/spans.
+
+        Args:
+            payload: List of Zipkin v2 span dicts
+        """
+        url = f"{self.base_url.rstrip('/')}/api/v2/spans"
+        data = json.dumps(payload).encode("utf-8")
+        http_headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.headers:
+            http_headers.update(self.headers)
+
+        req = urllib.request.Request(url, data=data, headers=http_headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=5) as _resp:
+                pass
+        except urllib.error.URLError as e:
+            if self.logger:
+                self.logger.warn(f"ZipkinExporter: failed to send spans to {url}: {e}")
+        except OSError as e:
+            if self.logger:
+                self.logger.warn(f"ZipkinExporter: connection error: {e}")
+
+
+# =============================================================================
+# Jaeger Exporter
+# =============================================================================
+
+
+class JaegerExporter(ZipkinExporter):
+    """Exporter that sends spans to Jaeger via its Zipkin-compatible HTTP collector.
+
+    Jaeger accepts Zipkin v2 JSON format on its Zipkin collector endpoint,
+    so this exporter reuses ZipkinExporter logic with Jaeger-specific defaults.
+
+    Args:
+        endpoint: Full collector URL
+            (default: "http://localhost:14268/api/traces")
+        interval: Flush interval in seconds (default: 5.0)
+        default_tags: Tags added to every span (default: None)
+        headers: Extra HTTP headers (default: None)
+        legacy_mode: Use 64-bit trace IDs instead of 128-bit (default: False)
+
+    Example:
+        tracer = Tracer(broker, TracerOptions(
+            exporter=[JaegerExporter(endpoint="http://jaeger:14268/api/traces")]
+        ))
+    """
+
+    __slots__ = ("_legacy_mode",)
+
+    _DEFAULT_ENDPOINT = "http://localhost:14268/api/traces"
+    _TRACE_ID_64BIT_LEN = 16
+
+    def __init__(
+        self,
+        endpoint: str = _DEFAULT_ENDPOINT,
+        interval: float = 5.0,
+        default_tags: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        legacy_mode: bool = False,
+    ) -> None:
+        """Initialize JaegerExporter.
+
+        Args:
+            endpoint: Jaeger Zipkin collector endpoint URL
+            interval: Flush interval in seconds
+            default_tags: Tags added to every span
+            headers: Extra HTTP headers
+            legacy_mode: Use 64-bit trace IDs if True
+        """
+        super().__init__(
+            base_url=endpoint,
+            interval=interval,
+            default_tags=default_tags,
+            headers=headers,
+        )
+        self._legacy_mode: bool = legacy_mode
+
+    def _make_payload(self, span: Span) -> dict[str, Any]:
+        """Convert span, optionally using 64-bit trace IDs in legacy mode.
+
+        Args:
+            span: The span to convert
+
+        Returns:
+            Zipkin v2 span dict
+        """
+        result = super()._make_payload(span)
+        if self._legacy_mode:
+            trace_id = result.get("traceId")
+            if isinstance(trace_id, str) and len(trace_id) > self._TRACE_ID_64BIT_LEN:
+                result["traceId"] = trace_id[: self._TRACE_ID_64BIT_LEN]
+        return result
+
+    def _post(self, payload: list[dict[str, Any]]) -> None:
+        """HTTP POST payload to Jaeger Zipkin collector endpoint.
+
+        Args:
+            payload: List of Zipkin v2 span dicts
+        """
+        data = json.dumps(payload).encode("utf-8")
+        http_headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.headers:
+            http_headers.update(self.headers)
+
+        req = urllib.request.Request(self.base_url, data=data, headers=http_headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=5) as _resp:
+                pass
+        except urllib.error.URLError as e:
+            if self.logger:
+                self.logger.warn(f"JaegerExporter: failed to send spans to {self.base_url}: {e}")
+        except OSError as e:
+            if self.logger:
+                self.logger.warn(f"JaegerExporter: connection error: {e}")
+
+
+# =============================================================================
 # Exports
 # =============================================================================
 
@@ -1006,4 +1322,6 @@ __all__ = [  # noqa: RUF022
     "BaseTraceExporter",
     "ConsoleExporter",
     "EventExporter",
+    "JaegerExporter",
+    "ZipkinExporter",
 ]

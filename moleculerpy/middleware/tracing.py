@@ -165,7 +165,7 @@ class TracingMiddleware(Middleware):
             broker: The broker instance
         """
         if self.tracer:
-            self.tracer.stop()
+            await self.tracer.stop()
 
     async def local_action(self, next_handler: HandlerType[Any], action: Any) -> HandlerType[Any]:
         """Wrap local action with tracing span.

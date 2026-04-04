@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.11] - 2026-04-04
+
+### Added
+- **Tracing Exporters: Jaeger + Zipkin** (PRD-015)
+  - `ZipkinExporter`: batch HTTP POST to Zipkin API v2 (`/api/v2/spans`)
+  - `JaegerExporter`: HTTP POST to Jaeger Zipkin collector endpoint
+  - Zipkin v2 JSON format with microsecond timestamps
+  - Periodic async flush with configurable interval (default 5s)
+  - Graceful stop: flush remaining spans before shutdown
+  - ID conversion: UUID → 64/128-bit hex (Node.js compatible)
+  - Span tags flattened + stringified, annotations from logs
+  - `default_tags` merged into every span
+  - Zero new dependencies (stdlib `urllib.request`)
+  - 58 unit tests + 3 E2E tests
+
+### Fixed
+- **Tracer.stop() async**: now properly awaits async exporters (was sync, caused
+  RuntimeWarning with ZipkinExporter/JaegerExporter)
+
 ## [0.14.10] - 2026-04-04
 
 ### Added
