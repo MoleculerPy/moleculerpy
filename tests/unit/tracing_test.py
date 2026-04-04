@@ -367,13 +367,14 @@ class TestTracer:
         exporter.init.assert_not_called()
         assert len(tracer.exporters) == 0
 
-    def test_tracer_stop(self, mock_broker):
-        """Test tracer stop."""
+    @pytest.mark.asyncio
+    async def test_tracer_stop(self, mock_broker):
+        """Test tracer stop (async — supports both sync and async exporters)."""
         exporter = MagicMock(spec=BaseTraceExporter)
         tracer = Tracer(mock_broker, TracerOptions(exporter=[exporter]))
         tracer.init()
 
-        tracer.stop()
+        await tracer.stop()
 
         exporter.stop.assert_called_once()
         assert len(tracer.exporters) == 0

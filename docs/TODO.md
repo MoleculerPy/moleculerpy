@@ -285,8 +285,8 @@ All README claims have been verified and corrected to match actual implementatio
 ### Next releases (each = one 0.14.x version)
 
 - [x] **v0.14.8** — Pluggable metrics system (BaseReporter + Console/Prometheus) → [PRD-012](../../.forgeplan/prds/PRD-012-pluggable-metrics-system.md) ✅ Released 2026-04-03
-- [ ] **v0.14.9** — Pluggable validators (BaseValidator ABC) → [PRD-013](../../.forgeplan/prds/PRD-013-pluggable-validator-system.md)
-- [ ] **v0.14.10** — LRU memory cacher → [PRD-014](../../.forgeplan/prds/PRD-014-lru-memory-cacher.md)
+- [x] **v0.14.9** — Pluggable validators (BaseValidator ABC) → [PRD-013](../../.forgeplan/prds/PRD-013-pluggable-validator-system.md) ✅ Released 2026-04-03
+- [x] **v0.14.10** — LRU memory cacher → [PRD-014](../../.forgeplan/prds/PRD-014-lru-memory-cacher.md) ✅ Released 2026-04-04
 - [ ] **v0.14.11** — Tracing: Jaeger + Zipkin exporters → [PRD-015](../../.forgeplan/prds/PRD-015-tracing-exporters-jaeger-zipkin.md)
 - [ ] **v0.14.12** — REPL completion (10 new commands) → [PRD-004](../../.forgeplan/prds/PRD-004-repl-to-production.md)
 - [ ] **v0.14.13** — MQTT transporter → [PRD-016](../../.forgeplan/prds/PRD-016-mqtt-transporter.md)
