@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.12] - 2026-04-04
+
+### Added
+- **$node Internal Service** — 7 introspection actions:
+  - `$node.list` — list all cluster nodes
+  - `$node.services` — list all services (filter: onlyLocal, skipInternal)
+  - `$node.actions` — list all actions
+  - `$node.events` — list all events
+  - `$node.health` — system health (CPU, memory, OS, process)
+  - `$node.options` — broker settings
+  - `$node.metrics` — metrics listing
+- **broker.mcall()** — parallel multi-action calls (list and dict formats)
+  - `settled=True` for partial failure tolerance (like Promise.allSettled)
+- **broker.ping()** — ping remote nodes, measure RTT
+- **broker.get_health_status()** + `moleculerpy.health` module
+  - Returns: cpu, mem, os, process, client, net, time
+- Transit: `$node.pong` event emitted on PONG receive (enables broker.ping)
+
 ## [0.14.11] - 2026-04-04
 
 ### Added

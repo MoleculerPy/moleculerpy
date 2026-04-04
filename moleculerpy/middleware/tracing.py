@@ -329,16 +329,29 @@ class TracingMiddleware(Middleware):
             "trace_id": ctx.request_id,
         }
 
-        # Parent span
-        if ctx.parent_id:
+        # Parent span — use parent span's ID for correct trace parent-child linking
+        # broker.call() propagates ctx.parent_span from parent context
+        parent_span = getattr(ctx, "parent_span", None)
+        if parent_span and hasattr(parent_span, "id"):
+            opts["parent_id"] = parent_span.id
+        elif ctx.parent_id:
             opts["parent_id"] = ctx.parent_id
 
-        # Service info
-        service = getattr(ctx, "service", None)
-        if service:
+        # Service info — get from action object (ctx.service may be None for local calls)
+        action_service = getattr(action, "service", None)
+        action_name_str = getattr(action, "name", str(action))
+        service_name = None
+        if isinstance(action_service, str):
+            service_name = action_service
+        elif action_name_str and "." in action_name_str:
+            service_name = action_name_str.rsplit(".", 1)[0]
+
+        ctx_service = getattr(ctx, "service", None)
+        if service_name or ctx_service:
+            svc_name = service_name or getattr(ctx_service, "name", None)
             opts["service"] = {
-                "name": getattr(service, "name", None),
-                "version": getattr(service, "version", None),
+                "name": svc_name,
+                "version": getattr(ctx_service, "version", None) if ctx_service else None,
                 "node_id": ctx.node_id,
             }
 

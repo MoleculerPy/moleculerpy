@@ -143,10 +143,19 @@ class TestZipkinExporterDefaults:
 class TestZipkinConvertId:
     """Test _convert_id hex conversion."""
 
-    def test_strips_dashes(self):
+    def test_strips_dashes_and_truncates(self):
+        """UUID → strip dashes → truncate to 16 hex chars (64-bit span ID)."""
         exp = ZipkinExporter()
         result = exp._convert_id("550e8400-e29b-41d4-a716-446655440000")
+        assert result == "550e8400e29b41d4"  # 16 chars (Zipkin spec)
+        assert len(result) == 16
+
+    def test_convert_id_32_chars_for_trace(self):
+        """traceId uses length=32 (128-bit)."""
+        exp = ZipkinExporter()
+        result = exp._convert_id("550e8400-e29b-41d4-a716-446655440000", length=32)
         assert result == "550e8400e29b41d4a716446655440000"
+        assert len(result) == 32
 
     def test_none_returns_none(self):
         """None UUID → None (callers check before using)."""
@@ -186,11 +195,13 @@ class TestZipkinMakePayload:
         assert payload["traceId"] == "550e8400e29b41d4a716446655440000"
 
     def test_span_id_in_payload(self):
+        """Span id is truncated to 16 hex chars (64-bit, Zipkin spec)."""
         span = make_span()
         exp = ZipkinExporter()
         payload = exp._make_payload(span)
-        expected = span.id.replace("-", "")
+        expected = span.id.replace("-", "")[:16]
         assert payload["id"] == expected
+        assert len(payload["id"]) == 16
 
     def test_name_in_payload(self):
         span = make_span(name="math.add")
