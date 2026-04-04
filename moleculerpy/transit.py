@@ -571,6 +571,8 @@ class Transit:
 
         Phase 5: Latency measurement protocol.
         Calculates round-trip time and updates latency records.
+        Emits $node.pong on local bus for broker.ping() compatibility
+        (Moleculer.js transit.js processPong pattern).
 
         Args:
             packet: PONG packet
@@ -580,6 +582,24 @@ class Transit:
 
         if self._latency_monitor:
             await self._latency_monitor.handle_pong(packet.sender, packet.payload)
+
+        # Emit $node.pong for broker.ping() listeners (Moleculer.js compatible)
+        now = time.time() * 1000
+        sent_time = packet.payload.get("time", now)
+        arrived = packet.payload.get("arrived", now)
+        elapsed = now - sent_time
+        time_diff = round(arrived - sent_time - elapsed / 2)
+        broker = getattr(self, "_broker", None)
+        if broker is not None:
+            await broker.broadcast_local(
+                "$node.pong",
+                {
+                    "nodeID": packet.sender,
+                    "elapsedTime": round(elapsed, 3),
+                    "timeDiff": time_diff,
+                    "id": packet.payload.get("id"),
+                },
+            )
 
     async def _handle_event(self, packet: Packet) -> None:
         """Handle event packets.
