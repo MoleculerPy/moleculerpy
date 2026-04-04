@@ -50,11 +50,20 @@ def get_health_status() -> dict[str, Any]:
     mem: dict[str, Any] = {
         "free": mem_info.available,
         "total": mem_info.total,
-        "percent": round(mem_info.percent, 1),
+        # Node.js: percent = free * 100 / total (percent FREE, not used)
+        "percent": round((mem_info.available * 100) / mem_info.total, 1)
+        if mem_info.total > 0
+        else 0,
     }
 
-    # OS
+    # OS (Node.js: uptime, type, release, hostname, arch, platform, user)
+    try:
+        os_uptime = time.time() - psutil.boot_time()
+    except Exception:
+        os_uptime = 0.0
+
     os_info: dict[str, Any] = {
+        "uptime": round(os_uptime, 3),
         "type": platform.system(),
         "release": platform.release(),
         "hostname": static["hostname"],
@@ -84,6 +93,7 @@ def get_health_status() -> dict[str, Any]:
         },
         "uptime": round(time.time() - proc_create_time, 3),
         "cpuUsage": round(proc_cpu, 1),
+        "argv": sys.argv,
         "pythonVersion": static["python_version"],
     }
 
