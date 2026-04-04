@@ -1116,7 +1116,9 @@ class ZipkinExporter(BaseTraceExporter):
             self._queue.clear()
 
         payload = [self._make_payload(span) for span in spans]
-        self._post(payload)
+        # Run blocking HTTP in executor to avoid blocking event loop
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._post, payload)
 
     def _make_payload(self, span: Span) -> dict[str, Any]:
         """Convert a Span to Zipkin v2 JSON format.
@@ -1147,48 +1149,60 @@ class ZipkinExporter(BaseTraceExporter):
             for log in span.logs
         ]
 
-        parent_id = self._convert_id(span.parent_id) if span.parent_id else None
+        # ID conversion: traceId = 32 hex (128-bit), id/parentId = 16 hex (64-bit)
+        # Node.js: convertID(id) = id.replace(/-/g, "").substring(0, 16)
+        parent_id = self._convert_id(span.parent_id, 16) if span.parent_id else None
 
         result: dict[str, Any] = {
-            "traceId": self._convert_id(span.trace_id),
-            "id": self._convert_id(span.id),
+            "traceId": self._convert_id(span.trace_id, 32),
+            "id": self._convert_id(span.id, 16),
             "name": span.name,
             "timestamp": round(span.start_time * 1_000_000),
             "duration": round(span.duration * 1_000_000),
             "localEndpoint": {"serviceName": service_name},
+            "remoteEndpoint": {"serviceName": service_name},
             "tags": tags,
             "annotations": annotations,
             "parentId": parent_id,
         }
 
-        span_type = span.type.upper() if span.type else ""
-        if span_type in ("ACTION", "REQUEST"):
-            result["kind"] = "CLIENT"
-        else:
-            result["kind"] = "SERVER"
+        # Error handling (Node.js zipkin.js:180-188)
+        if span.error:
+            result["tags"]["error"] = str(span.error)
+            annotations.append(
+                {
+                    "value": "error",
+                    "timestamp": round((span.start_time + span.duration) * 1_000_000),
+                }
+            )
+
+        # Kind based on span type
+        result["kind"] = "SERVER"
 
         return result
 
     @staticmethod
     def _convert_id(uid: str | None, length: int = 16) -> str | None:
-        """Strip dashes from a UUID/hex string.
+        """Convert UUID/hex string to Zipkin-compatible hex ID.
 
-        The ``length`` parameter is accepted for API compatibility but is
-        treated as a hint only — no truncation or padding is applied.
+        Strips dashes and truncates to ``length`` hex chars.
+        Zipkin spec: traceId = 16 or 32 chars, id/parentId = 16 chars.
+
+        Node.js equivalent: zipkin.js convertID() — ``id.replace(/-/g, "").substring(0, 16)``
 
         Args:
             uid: UUID or raw hex string, or None/empty string
-            length: Ignored (kept for subclass compatibility)
+            length: Target hex length (16 for span/parent IDs, 32 for trace IDs)
 
         Returns:
-            Hex string without dashes, ``None`` if *uid* is ``None``,
-            or ``""`` if *uid* is an empty string.
+            Hex string truncated to ``length``, or None.
         """
         if uid is None:
             return None
         if uid == "":
             return ""
-        return uid.replace("-", "")
+        hex_str = uid.replace("-", "")
+        return hex_str[:length]
 
     def _post(self, payload: list[dict[str, Any]]) -> None:
         """HTTP POST payload to Zipkin /api/v2/spans.
