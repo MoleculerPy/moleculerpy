@@ -811,6 +811,7 @@ class ServiceBroker:
             meta = {}
 
         # Calculate level, request_id, caller, and tracing from parent context
+        parent_span = None
         if parent_ctx is not None:
             level = parent_ctx.level + 1
             request_id = parent_ctx.request_id
@@ -819,6 +820,8 @@ class ServiceBroker:
             tracing = parent_ctx.tracing
             # Phase 3B: Set caller to parent's service fullName if available
             caller = parent_ctx.service.name if parent_ctx.service else None
+            # Propagate parent span for trace parent-child linking
+            parent_span = getattr(parent_ctx, "span", None)
         else:
             level = 1
             request_id = None  # Will be set to context.id by Lifecycle
@@ -844,6 +847,10 @@ class ServiceBroker:
             caller=caller,
             tracing=tracing,
         )
+
+        # Propagate parent span for trace parent-child linking
+        if parent_span is not None:
+            context.parent_span = parent_span
 
         # Use load-balanced endpoint selection with full context.
         # ShardStrategy relies on ctx.params to resolve shard keys.
