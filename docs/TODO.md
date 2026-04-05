@@ -72,15 +72,25 @@ All README claims have been verified and corrected to match actual implementatio
 
 ---
 
+## Completed Features (since initial audit)
+
+- [x] MsgPack serializer (v0.14.4)
+- [x] LRU cache (v0.14.10)
+- [x] Jaeger & Zipkin tracing exporters (v0.14.11)
+- [x] Service versioning (v0.14.7)
+- [x] REST API Gateway (moleculerpy-web 0.1.0)
+- [x] Pluggable validators (v0.14.9)
+- [x] Pluggable metrics (v0.14.8)
+- [x] $node service, mcall, ping, health (v0.14.12)
+- [x] REPL 18/19 commands (repl v0.3.1)
+
 ## Planned Features (in Roadmap)
 
-- MsgPack serializer
-- LRU cache
-- Jaeger & Zipkin tracing exporters
-- Service versioning (v1.users.get)
-- Kafka transporter
-- AMQP transporter
-- REST API Gateway
+- MQTT transporter (v0.14.14, PRD-016)
+- AMQP transporter (v0.14.15, PRD-017)
+- Kafka transporter (v0.14.16, PRD-018)
+- TCP + Gossip (v0.14.17, PRD-010)
+- CBOR + ProtoBuf serializers (v0.14.18, PRD-019)
 - Database adapters
 - GraphQL gateway
 - gRPC support
@@ -109,11 +119,11 @@ All README claims have been verified and corrected to match actual implementatio
 | Tests | 9.0/10 | ~2K tests, 88-100% coverage |
 | Core framework | 9.5/10 | Production ready |
 | Channels | 10/10 | Outperforms Node.js (0.77ms vs 5ms) |
-| REPL | 7.5/10 | Beta, 88% complete |
-| CI/CD | 5.0/10 | Only core has CI |
+| REPL | 9.5/10 | Production, 18/19 commands (v0.3.1) |
+| CI/CD | 7.0/10 | All 3 projects have CI + PyPI OIDC |
 | Docker/Deploy | 2.0/10 | No production Docker |
 | Documentation | 8.5/10 | Excellent, but has gaps |
-| Release pipeline | 2.0/10 | Manual process |
+| Release pipeline | 8.0/10 | OIDC publish on tag, 9 releases done |
 
 ---
 
@@ -135,11 +145,10 @@ All README claims have been verified and corrected to match actual implementatio
 
 **Description:** GitHub Actions for channels and repl (core already has one)
 **Priority:** P0
-**Status:** Open
-**Discovered:** 2026-02-11 (Audit)
+**Status:** Done (PRD-002, 2026-03-31)
 
-- [ ] `.github/workflows/channels-ci.yml` — lint + unit tests
-- [ ] `.github/workflows/repl-ci.yml` — lint + unit tests
+- [x] `.github/workflows/channels-ci.yml` — lint + unit tests
+- [x] `.github/workflows/repl-ci.yml` — lint + unit tests
 - [ ] Update `ci.yml` (core) — add integration tests with Docker services
 - [ ] MyPy strict in CI for core (remove `continue-on-error: true`)
 
@@ -147,12 +156,11 @@ All README claims have been verified and corrected to match actual implementatio
 
 **Description:** Automatic package publishing on tag/release creation
 **Priority:** P0
-**Status:** Open
-**Discovered:** 2026-02-11 (Audit)
+**Status:** Done (PRD-003, 2026-03-31)
 
-- [ ] `.github/workflows/release.yml` — publish to PyPI on tag
-- [ ] Configure PyPI trusted publisher (OIDC)
-- [ ] Workflow for all 3 packages: moleculerpy, moleculerpy-channels, moleculerpy-repl
+- [x] `.github/workflows/release.yml` — publish to PyPI on tag
+- [x] Configure PyPI trusted publisher (OIDC)
+- [x] Workflow for all 3 packages: moleculerpy, moleculerpy-channels, moleculerpy-repl
 
 ### 4. Dependency locking
 
