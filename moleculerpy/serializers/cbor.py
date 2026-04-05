@@ -21,7 +21,7 @@ try:
 
     CBOR_AVAILABLE = True
 except ImportError:
-    cbor2 = None  # type: ignore[assignment]
+    cbor2 = None
     CBOR_AVAILABLE = False
 
 
@@ -58,7 +58,8 @@ class CborSerializer(BaseSerializer):
         """
         assert cbor2 is not None
         try:
-            return cbor2.dumps(payload)
+            result: bytes = cbor2.dumps(payload)
+            return result
         except Exception as e:
             if isinstance(e, SerializationError):
                 raise

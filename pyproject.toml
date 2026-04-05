@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moleculerpy"
-version = "0.14.17"
+version = "0.14.18"
 description = "Fast, modern microservices framework for Python - Port of Moleculer.js"
 authors = [
     { name = "Eli Rum", email = "explosivebit@gmail.com" }
@@ -100,6 +100,14 @@ msgpack = [
     "msgpack>=1.0.0",
 ]
 
+cbor = [
+    "cbor2>=5.6.0",
+]
+
+protobuf = [
+    "protobuf>=5.0.0",
+]
+
 hotreload = [
     "watchdog>=6.0.0"
 ]
@@ -114,6 +122,8 @@ all = [
     "cryptography>=46.0.0",
     "watchdog>=6.0.0",
     "msgpack>=1.0.0",
+    "cbor2>=5.6.0",
+    "protobuf>=5.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
