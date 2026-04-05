@@ -111,11 +111,16 @@ class MqttTransporter(Transporter):
         """Establish connection to the MQTT broker.
 
         Lazily imports aiomqtt to fail gracefully when not installed.
+        Safe to call on already-connected transporter (will disconnect first).
 
         Raises:
             ImportError: If aiomqtt is not installed
             Exception: If connection fails
         """
+        # Guard against reconnect: clean up previous connection first
+        if self._client is not None:
+            await self.disconnect()
+
         try:
             import aiomqtt  # noqa: PLC0415 — lazy import, matches Node.js pattern
         except ImportError:
@@ -148,10 +153,10 @@ class MqttTransporter(Transporter):
         if self._listener_task and not self._listener_task.done():
             self._listener_task.cancel()
             try:
-                await asyncio.wait_for(self._listener_task, timeout=DISCONNECT_TIMEOUT_SECONDS)
-            except (TimeoutError, asyncio.CancelledError):
+                await self._listener_task
+            except asyncio.CancelledError:
                 pass
-            self._listener_task = None
+        self._listener_task = None
 
         # Disconnect client
         if self._client:
@@ -167,6 +172,7 @@ class MqttTransporter(Transporter):
         """Listen for incoming MQTT messages in background.
 
         Routes messages through the middleware chain.
+        On unexpected errors, marks connection as broken to prevent zombie state.
         """
         if not self._client:
             return
@@ -180,7 +186,9 @@ class MqttTransporter(Transporter):
             pass
         except Exception:
             if not self._shutting_down:
-                logger.exception("MQTT listener error")
+                logger.exception("MQTT listener error — connection may be broken")
+                # Prevent zombie state: clear client so publish/subscribe fail fast
+                self._client = None
 
     async def _handle_message(self, message: Any) -> None:
         """Handle a single incoming MQTT message.
@@ -207,11 +215,10 @@ class MqttTransporter(Transporter):
         remainder = raw_topic[prefix_len:]
         cmd = remainder.split(self.topic_separator)[0]
 
-        # Resolve packet type
+        # Resolve packet type using standard MOL.{CMD} format for from_topic
+        # Note: from_topic always uses "." separator internally (NATS convention)
         try:
-            packet_type = Packet.from_topic(
-                f"MOL.{cmd}"  # from_topic expects MOL.{CMD} format
-            )
+            packet_type = Packet.from_topic(f"{self.prefix}.{cmd}")
         except ValueError:
             logger.warning("Skipping MQTT message from unknown topic: %s", raw_topic)
             return
