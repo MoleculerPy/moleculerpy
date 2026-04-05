@@ -102,7 +102,7 @@ class FrameParser:
             yield topic, payload
 
     # --- Async iterator protocol ---
-    async def __aiter__(self):
+    async def __aiter__(self) -> None:
         """Not usable standalone — use read_frames(reader) instead."""
         raise TypeError("Use parser.read_frames(reader) to iterate")
 

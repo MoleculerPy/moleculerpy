@@ -334,18 +334,18 @@ class TcpTransporter(Transporter):
 
         Priority: udp_address > hostname (if use_hostname) > first IP in ipList.
         """
-        udp_addr = getattr(node, "udp_address", None)
+        udp_addr: str | None = getattr(node, "udp_address", None)
         if udp_addr:
             return udp_addr
 
         if self.opts.get("use_hostname", True):
-            hostname = getattr(node, "hostname", None)
+            hostname: str | None = getattr(node, "hostname", None)
             if hostname:
                 return hostname
 
-        ip_list = getattr(node, "ipList", None)
+        ip_list: list[str] | None = getattr(node, "ipList", None)
         if ip_list and len(ip_list) > 0:
-            return ip_list[0]
+            return str(ip_list[0])
 
         return None
 

@@ -79,7 +79,7 @@ class TcpReader:
             return self._port
         sockets = self._server.sockets
         if sockets:
-            return sockets[0].getsockname()[1]
+            return int(sockets[0].getsockname()[1])
         return self._port
 
     async def listen(self) -> int:
