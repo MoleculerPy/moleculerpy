@@ -96,10 +96,10 @@ class TestMqttParseConnectionString:
         assert host == "localhost"
         assert port == 1883
 
-    def test_mqtts_url(self):
-        host, port = MqttTransporter._parse_connection_string("mqtts://broker.example.com:8883")
-        assert host == "broker.example.com"
-        assert port == 8883
+    def test_mqtts_url_raises_not_implemented(self):
+        """mqtts:// is not yet supported — should raise explicitly, not silently skip TLS."""
+        with pytest.raises(NotImplementedError, match="TLS"):
+            MqttTransporter._parse_connection_string("mqtts://broker.example.com:8883")
 
     def test_plain_host_port(self):
         host, port = MqttTransporter._parse_connection_string("myhost:1884")
@@ -119,6 +119,29 @@ class TestMqttParseConnectionString:
     def test_tcp_scheme(self):
         host, port = MqttTransporter._parse_connection_string("tcp://broker:1883")
         assert host == "broker"
+        assert port == 1883
+
+    def test_mqtts_raises_not_implemented(self):
+        with pytest.raises(NotImplementedError, match="TLS"):
+            MqttTransporter._parse_connection_string("mqtts://broker:8883")
+
+    def test_ipv6_with_port(self):
+        host, port = MqttTransporter._parse_connection_string("mqtt://[::1]:1883")
+        assert host == "::1"
+        assert port == 1883
+
+    def test_ipv6_without_port(self):
+        host, port = MqttTransporter._parse_connection_string("[::1]")
+        assert host == "::1"
+        assert port == 1883
+
+    def test_ipv6_malformed_raises(self):
+        with pytest.raises(ValueError, match="Malformed IPv6"):
+            MqttTransporter._parse_connection_string("[::1")
+
+    def test_empty_string(self):
+        host, port = MqttTransporter._parse_connection_string("")
+        assert host == ""
         assert port == 1883
 
 

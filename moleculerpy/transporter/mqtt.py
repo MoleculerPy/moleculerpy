@@ -315,20 +315,49 @@ class MqttTransporter(Transporter):
         """Parse MQTT connection URL into hostname and port.
 
         Supports: mqtt://host:port, mqtt://host, host:port, host
+        Raises NotImplementedError for mqtts:// (TLS not yet supported).
 
         Args:
             connection_string: MQTT broker URL or hostname
 
         Returns:
             Tuple of (hostname, port)
+
+        Raises:
+            NotImplementedError: If mqtts:// scheme is used (TLS support planned for v2)
         """
         url = connection_string
 
+        # Reject mqtts:// — TLS not yet implemented (audit finding #7)
+        if url.startswith("mqtts://"):
+            raise NotImplementedError(
+                "MQTT over TLS (mqtts://) is not yet supported. "
+                "Use mqtt:// for unencrypted connections."
+            )
+
         # Strip scheme
-        for scheme in ("mqtt://", "mqtts://", "tcp://"):
+        for scheme in ("mqtt://", "tcp://"):
             if url.startswith(scheme):
                 url = url[len(scheme) :]
                 break
+
+        # Handle IPv6 bracket notation: [::1]:1883
+        if url.startswith("["):
+            bracket_end = url.find("]")
+            if bracket_end == -1:
+                raise ValueError(
+                    f"Malformed IPv6 address in connection string: {connection_string}"
+                )
+            host = url[1:bracket_end]  # strip brackets
+            remainder = url[bracket_end + 1 :]
+            if remainder.startswith(":"):
+                try:
+                    port = int(remainder[1:])
+                except ValueError:
+                    port = 1883
+            else:
+                port = 1883
+            return host, port
 
         # Split host:port
         if ":" in url:
