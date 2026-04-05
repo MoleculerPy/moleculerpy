@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.17] - 2026-04-06
+
+### Added
+- **TCP Transporter with Gossip Protocol** (PRD-010) — peer-to-peer transport without external broker:
+  - `TcpTransporter` with direct TCP messaging and Gossip-based service discovery
+  - No external dependencies — pure asyncio P2P (no NATS, Redis, or Docker needed)
+  - Gossip Protocol replaces HEARTBEAT/DISCOVER/INFO for node state exchange
+  - `FrameParser` with 6-byte binary wire protocol (CRC + length + type), compatible with Node.js
+  - `TcpReader` — asyncio TCP server with per-connection frame parsing, max incoming limit (256)
+  - `TcpWriter` — outgoing connection pool with LRU eviction, lazy connect, 5s timeout
+  - `UdpBroadcaster` — zero-config LAN discovery via UDP multicast (239.0.0.0:4445) or broadcast
+  - Static URL config: string, array, dict, or `file://` (matching Node.js loadUrls)
+  - Writer EOF detection via background monitor tasks (Node.js socket.on("end") equivalent)
+  - TCP tuning: TCP_NODELAY + SO_KEEPALIVE (from Go reference)
+  - Security: incoming connection cap, UDP payload size limit, port validation
+  - 100% feature parity with Node.js TCP transporter (all 8 packet types, all gossip cases)
+  - 84 unit tests + 5 integration tests (2-node P2P with real gossip discovery)
+  - Performance: 196K req/sec local, 5.8K req/sec remote (0.17ms P2P latency)
+  - 3 audit rounds (7+ agents): security, code quality, Node.js compat, test coverage, feature parity
+  - `transporter="tcp://host:port/nodeID,host2:port2/nodeID2"` or `transporter="tcp://"` (UDP discovery)
+
+### Changed
+- `packet.py` — added GOSSIP_HELLO, GOSSIP_REQ, GOSSIP_RES topic types
+- `node.py` — added `port` and `udp_address` slots to Node class
+- `transporter/base.py` — registered TCP transporter in factory
+
 ## [0.14.16] - 2026-04-05
 
 ### Added
