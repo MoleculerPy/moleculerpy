@@ -182,6 +182,7 @@ class Transporter(ABC):
         importlib.import_module("moleculerpy.transporter.nats")
         importlib.import_module("moleculerpy.transporter.memory")
         importlib.import_module("moleculerpy.transporter.redis")
+        importlib.import_module("moleculerpy.transporter.mqtt")
 
         for subclass in cls.__subclasses__():
             if subclass.__name__.lower().startswith(name.lower()):
