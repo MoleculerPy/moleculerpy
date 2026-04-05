@@ -25,11 +25,14 @@ class BaseSerializer(ABC):
     MAX_PAYLOAD_BYTES: ClassVar[int] = 8 * 1024 * 1024  # 8MB default
 
     @abstractmethod
-    def serialize(self, payload: dict[str, Any]) -> bytes:
+    def serialize(self, payload: dict[str, Any], packet_type: str | None = None) -> bytes:
         """Serialize payload dict to bytes.
 
         Args:
             payload: Dictionary to serialize
+            packet_type: Optional Moleculer packet type (e.g., "REQ", "EVENT").
+                Schema-based serializers (ProtoBuf) require this for correct encoding.
+                Schema-less serializers (JSON, MsgPack, CBOR) ignore it.
 
         Returns:
             Serialized bytes representation
@@ -40,11 +43,12 @@ class BaseSerializer(ABC):
         ...
 
     @abstractmethod
-    def deserialize(self, data: bytes) -> dict[str, Any]:
+    def deserialize(self, data: bytes, packet_type: str | None = None) -> dict[str, Any]:
         """Deserialize bytes to payload dict.
 
         Args:
             data: Bytes to deserialize
+            packet_type: Optional Moleculer packet type for schema-based deserialization.
 
         Returns:
             Deserialized dictionary
@@ -54,28 +58,28 @@ class BaseSerializer(ABC):
         """
         ...
 
-    async def serialize_async(self, payload: dict[str, Any]) -> bytes:
+    async def serialize_async(
+        self, payload: dict[str, Any], packet_type: str | None = None
+    ) -> bytes:
         """Serialize with synchronous fast path.
-
-        For serialize, we cannot cheaply estimate size before serializing.
-        JSON/MsgPack are fast enough to always run synchronously.
 
         Args:
             payload: Dictionary to serialize
+            packet_type: Optional packet type for schema-based serializers.
 
         Returns:
             Serialized bytes representation
         """
-        return self.serialize(payload)
+        return self.serialize(payload, packet_type)
 
-    async def deserialize_async(self, data: bytes) -> dict[str, Any]:
+    async def deserialize_async(
+        self, data: bytes, packet_type: str | None = None
+    ) -> dict[str, Any]:
         """Deserialize with thread offload for large payloads.
-
-        Payloads larger than THREAD_OFFLOAD_THRESHOLD are deserialized
-        in a thread pool to avoid blocking the event loop.
 
         Args:
             data: Bytes to deserialize
+            packet_type: Optional packet type for schema-based serializers.
 
         Returns:
             Deserialized dictionary
@@ -88,5 +92,5 @@ class BaseSerializer(ABC):
                 f"Payload too large: {len(data)} bytes exceeds {self.MAX_PAYLOAD_BYTES} byte limit"
             )
         if len(data) > self.THREAD_OFFLOAD_THRESHOLD:
-            return await asyncio.to_thread(self.deserialize, data)
-        return self.deserialize(data)
+            return await asyncio.to_thread(self.deserialize, data, packet_type)
+        return self.deserialize(data, packet_type)

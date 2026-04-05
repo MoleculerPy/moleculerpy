@@ -16,12 +16,16 @@ Usage:
 from __future__ import annotations
 
 from .base import BaseSerializer
+from .cbor import CBOR_AVAILABLE, CborSerializer
 from .json import JsonSerializer
 from .msgpack import MsgPackSerializer
+from .protobuf import PROTOBUF_AVAILABLE, ProtoBufSerializer
 
 _SERIALIZER_REGISTRY: dict[str, type[BaseSerializer]] = {
     "JSON": JsonSerializer,
     "MSGPACK": MsgPackSerializer,
+    "CBOR": CborSerializer,
+    "PROTOBUF": ProtoBufSerializer,
 }
 
 
@@ -29,7 +33,7 @@ def resolve_serializer(name: str) -> BaseSerializer:
     """Resolve a serializer by name.
 
     Args:
-        name: Serializer name (case-insensitive). Supported: "json", "msgpack".
+        name: Serializer name (case-insensitive). Supported: "json", "msgpack", "cbor", "protobuf".
 
     Returns:
         Instantiated serializer
@@ -46,7 +50,9 @@ def resolve_serializer(name: str) -> BaseSerializer:
 
 __all__ = [
     "BaseSerializer",
+    "CborSerializer",
     "JsonSerializer",
     "MsgPackSerializer",
+    "ProtoBufSerializer",
     "resolve_serializer",
 ]

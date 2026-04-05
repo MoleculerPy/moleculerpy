@@ -212,7 +212,7 @@ class TestResolveSerializer:
 
     def test_resolve_unknown_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown serializer"):
-            resolve_serializer("protobuf")
+            resolve_serializer("avro")
 
     def test_resolve_empty_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown serializer"):
@@ -257,7 +257,7 @@ class TestAsyncSerializer:
             return_value=large_payload,
         ) as mock_to_thread:
             result = asyncio.run(serializer.deserialize_async(data))
-            mock_to_thread.assert_called_once_with(serializer.deserialize, data)
+            mock_to_thread.assert_called_once_with(serializer.deserialize, data, None)
         assert result == large_payload
 
 
