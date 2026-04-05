@@ -184,6 +184,7 @@ class Transporter(ABC):
         importlib.import_module("moleculerpy.transporter.redis")
         importlib.import_module("moleculerpy.transporter.mqtt")
         importlib.import_module("moleculerpy.transporter.amqp")
+        importlib.import_module("moleculerpy.transporter.kafka")
 
         for subclass in cls.__subclasses__():
             if subclass.__name__.lower().startswith(name.lower()):
