@@ -987,23 +987,33 @@ class ServiceBroker:
                     d["action"],
                     params=d.get("params"),
                     meta=d.get("meta"),
+                    timeout=d.get("options", {}).get("timeout")
+                    if isinstance(d.get("options"), dict)
+                    else None,
                 )
                 for d in definitions
             ]
             results = await asyncio.gather(*tasks, return_exceptions=settled)
             return list(results)
-        else:
+        elif isinstance(definitions, dict):
             names = list(definitions.keys())
             tasks = [
                 self.call(
                     definitions[name]["action"],
                     params=definitions[name].get("params"),
                     meta=definitions[name].get("meta"),
+                    timeout=definitions[name].get("options", {}).get("timeout")
+                    if isinstance(definitions[name].get("options"), dict)
+                    else None,
                 )
                 for name in names
             ]
             results = await asyncio.gather(*tasks, return_exceptions=settled)
             return dict(zip(names, results, strict=False))
+        else:
+            from .errors import MoleculerServerError  # noqa: PLC0415
+
+            raise MoleculerServerError("Invalid calling definition for mcall", 500)
 
     async def _emit_core(
         self,
@@ -1212,6 +1222,22 @@ class ServiceBroker:
                 or None if no pong received within timeout.
             For all nodes: dict of {nodeID: pong_data | None}
         """
+        # Check transit is connected (Node.js: if transit && transit.connected)
+        if not self.transit or not getattr(self.transit, "connected", False):
+            return None if node_id is not None else {}
+
+        if isinstance(node_id, list):
+            # Support list of node IDs (Node.js compat)
+            tasks = {nid: self._ping_node(nid, timeout) for nid in node_id}
+            results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+            return dict(
+                zip(
+                    tasks.keys(),
+                    [r if not isinstance(r, Exception) else None for r in results],
+                    strict=False,
+                )
+            )
+
         if node_id is not None:
             return await self._ping_node(node_id, timeout)
 

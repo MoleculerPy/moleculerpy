@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.13] - 2026-04-05
+
+### Fixed
+- **Audit hotfix release** — accumulated fixes from audit cycles:
+  - ZipkinExporter: ID truncation to Zipkin spec (16/32 hex), error spans, remoteEndpoint
+  - ZipkinExporter: flush() runs HTTP in executor (non-blocking)
+  - TracingMiddleware: service name extraction from action (was "unknown")
+  - TracingMiddleware: parent-child span linking via ctx.parent_span
+  - Tracer.stop(): async support for async exporters
+  - broker.mcall(): input validation + options/timeout proxy
+  - broker.ping(): transit.connected check + list[str] support
+  - health: mem.percent = FREE (Node.js compat), os.uptime, process.argv
+  - 35 new tests for broker gaps (mcall, ping, health, $node)
+
 ## [0.14.12] - 2026-04-04
 
 ### Added
