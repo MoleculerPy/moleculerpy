@@ -6,10 +6,12 @@ using various messaging protocols.
 Available transporters:
 - NatsTransporter: NATS messaging (production)
 - RedisTransporter: Redis Pub/Sub (production, common choice)
+- AmqpTransporter: AMQP 0-9-1 / RabbitMQ (enterprise, built-in balancer)
 - MqttTransporter: MQTT (IoT, edge computing)
 - MemoryTransporter: In-memory (development/testing)
 """
 
+from .amqp import AmqpTransporter
 from .base import Transporter
 from .memory import MemoryTransporter, get_global_bus, reset_global_bus
 from .mqtt import MqttTransporter
@@ -17,6 +19,7 @@ from .nats import NatsTransporter
 from .redis import RedisConnectionError, RedisTransporter
 
 __all__ = [
+    "AmqpTransporter",
     "MemoryTransporter",
     "MqttTransporter",
     "NatsTransporter",
