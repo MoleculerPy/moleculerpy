@@ -8,6 +8,7 @@ Requires: aiokafka>=0.10.0 (install with `pip install moleculerpy[kafka]`)
 Reference: sources/reference-implementations/moleculer/src/transporters/kafka.js (298 LOC)
 """
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -174,6 +175,24 @@ class KafkaTransporter(Transporter):
 
         logger.info("Kafka subscribing to %d topics.", len(topic_names))
 
+        # Pre-create topics (matches Node.js producer.createTopics)
+        try:
+            from aiokafka.admin import AIOKafkaAdminClient, NewTopic  # noqa: PLC0415
+
+            admin = AIOKafkaAdminClient(bootstrap_servers=self.bootstrap_servers)
+            await admin.start()
+            try:
+                new_topics = [
+                    NewTopic(name=t, num_partitions=1, replication_factor=1) for t in topic_names
+                ]
+                await admin.create_topics(new_topics)
+            except Exception:
+                pass  # Topics may already exist — safe to ignore
+            finally:
+                await admin.close()
+        except Exception:
+            logger.debug("Kafka AdminClient topic creation skipped (auto-create may handle it)")
+
         self._consumer = AIOKafkaConsumer(
             *topic_names,
             bootstrap_servers=self.bootstrap_servers,
@@ -185,8 +204,6 @@ class KafkaTransporter(Transporter):
         await self._consumer.start()
 
         # Start background consume loop
-        import asyncio  # noqa: PLC0415
-
         self._consume_task = asyncio.create_task(self._consume_loop())
         logger.info(
             "Kafka consumer started (group=%s, topics=%d).", self.group_id, len(topic_names)
@@ -223,6 +240,8 @@ class KafkaTransporter(Transporter):
                 meta = {"topic": topic, "packet_type": packet_type, "kafka_message": message}
                 await self.receive_with_middleware(cmd, message.value, meta)
 
+        except asyncio.CancelledError:
+            pass  # Normal shutdown
         except Exception:
             if not self._shutting_down:
                 logger.exception("Kafka consumer error — connection may be broken")
