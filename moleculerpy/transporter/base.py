@@ -185,8 +185,14 @@ class Transporter(ABC):
         importlib.import_module("moleculerpy.transporter.mqtt")
         importlib.import_module("moleculerpy.transporter.amqp")
         importlib.import_module("moleculerpy.transporter.kafka")
+        importlib.import_module("moleculerpy.transporter.tcp")
 
-        for subclass in cls.__subclasses__():
+        # TCP is a subpackage — also check nested subclasses
+        all_subclasses = list(cls.__subclasses__())
+        for sc in cls.__subclasses__():
+            all_subclasses.extend(sc.__subclasses__())
+
+        for subclass in all_subclasses:
             if subclass.__name__.lower().startswith(name.lower()):
                 return subclass.from_config(config, transit, handler, node_id)
 
