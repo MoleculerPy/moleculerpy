@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.15] - 2026-04-05
+
+### Added
+- **AMQP Transporter** (PRD-017) — enterprise RabbitMQ messaging with built-in load balancing:
+  - `AmqpTransporter` with `hasBuiltInBalancer=True` (RabbitMQ work queues)
+  - Fanout exchanges for broadcast (DISCOVER, INFO, HEARTBEAT, EVENT)
+  - Direct queues for targeted packets (REQUEST, RESPONSE)
+  - ACK/NACK for REQUEST packets (at-least-once delivery)
+  - Configurable prefetch (default: 1), queue TTL, event/heartbeat TTL
+  - Multi-URL cluster failover (round-robin)
+  - 51 unit tests + 5 integration tests with Docker RabbitMQ
+  - `pip install moleculerpy[amqp]` (aio-pika dependency)
+
+### Fixed
+- Transit: DISCONNECT added to self-echo topics (AMQP fanout echo compatibility)
+
 ## [0.14.14] - 2026-04-05
 
 ### Added

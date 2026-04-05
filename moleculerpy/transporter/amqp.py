@@ -470,10 +470,12 @@ class AmqpTransporter(Transporter):
             if need_ack:
                 try:
                     await self.receive_with_middleware(cmd, message.body, meta)
-                    await message.ack()
+                    if self._channel:
+                        await message.ack()
                 except Exception:
                     logger.exception("AMQP message handling error, nacking")
-                    await message.nack()
+                    if self._channel:
+                        await message.nack()
             else:
                 await self.receive_with_middleware(cmd, message.body, meta)
 

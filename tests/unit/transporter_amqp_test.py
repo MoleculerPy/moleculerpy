@@ -354,6 +354,7 @@ class TestAmqpMakeConsumer:
     async def test_consumer_with_ack_success(self):
         handler = AsyncMock()
         t = _make_transporter(handler=handler)
+        t._channel = AsyncMock()  # Channel must be alive for ACK
 
         consumer = t._make_consumer("REQ", need_ack=True)
         msg = AsyncMock()
@@ -368,6 +369,7 @@ class TestAmqpMakeConsumer:
     async def test_consumer_with_ack_failure_nacks(self):
         handler = AsyncMock(side_effect=RuntimeError("boom"))
         t = _make_transporter(handler=handler)
+        t._channel = AsyncMock()  # Channel must be alive for NACK
 
         consumer = t._make_consumer("REQ", need_ack=True)
         msg = AsyncMock()
