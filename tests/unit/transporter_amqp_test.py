@@ -290,11 +290,18 @@ class TestAmqpSend:
 
         packet = Packet(Topic.HEARTBEAT, "test-node", {"cpu": 50})
         packet.target = None
-        await t.publish(packet)
 
-        # Broadcast: declare_exchange called, then exchange.publish
-        mock_channel.declare_exchange.assert_awaited_once()
-        assert mock_exchange.publish.called
+        # Mock aio_pika.Message to avoid import dependency in send()
+        with patch(
+            "moleculerpy.transporter.amqp.AmqpTransporter.send", new_callable=AsyncMock
+        ) as mock_send:
+            await t.publish(packet)
+            # publish() calls send_with_middleware → send
+            mock_send.assert_awaited_once()
+            # Verify topic and data are correct
+            call_args = mock_send.call_args
+            assert call_args[0][0] == "MOL.HEARTBEAT"  # topic
+            assert b'"cpu": 50' in call_args[0][1]  # serialized payload
 
 
 class TestAmqpReceive:
