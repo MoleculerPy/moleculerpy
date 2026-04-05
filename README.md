@@ -167,31 +167,30 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 
 # Roadmap
 
-## Current status (v0.14.13)
+## Current status (v0.14.17)
 - Core framework with full service lifecycle
+- **7 Transporters**: NATS, Redis/Valkey, Memory, MQTT, AMQP, Kafka, **TCP+Gossip (P2P)**
+- **TCP Transporter** — peer-to-peer without external broker, Gossip protocol for discovery
 - **Service versioning** — `v1.users.get`, `v2.users.get` coexistence, `$noVersionPrefix`
-- NATS, Redis, Memory transporters
 - Pluggable serializers (JSON, MsgPack) — MsgPack 2x faster on large payloads
 - Balanced request/event handling via NATS queue groups (`disable_balancer=True`)
 - 4/4 transit middleware hooks (publish, send, receive, message handler)
 - 22 built-in middlewares
 - 6 load balancing strategies (including Shard)
 - Circuit breaker, bulkhead, retry patterns
-- Prometheus metrics & Console tracing
+- Pluggable metrics (Console, Prometheus) & tracing (Console, Event, Jaeger, Zipkin)
+- Pluggable validators (BaseValidator + DefaultValidator)
+- LRU memory cacher with eviction
+- $node service (7 actions), broker.mcall(), ping, health check
 - Streaming support
 - Protocol v4 safety: version check, NodeID conflict detection
-- REPL & Channels modules
-- Pre-commit/push hooks (ruff, mypy, pytest) + Codecov integration
+- REPL (18 commands) & Channels (Redis, NATS) modules
+- API Gateway (moleculerpy-web v0.1.0)
 
 ## Planned features
-- REST API Gateway (moleculerpy-web)
-- TCP transporter with Gossip protocol
+- TCP transporter TLS/shared_secret security
+- CBOR + ProtoBuf serializers
 - Database adapters (moleculerpy-db)
-- LRU cache
-- Jaeger & Zipkin tracing exporters
-- Service versioning (v1.users.get action naming)
-- Kafka transporter
-- AMQP transporter
 - GraphQL gateway
 - gRPC support
 

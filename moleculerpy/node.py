@@ -60,9 +60,11 @@ class Node:
         "local",
         "memory",
         "metadata",
+        "port",
         "sender",
         "seq",
         "services",
+        "udp_address",
         "ver",
     )
 
@@ -128,6 +130,10 @@ class Node:
         self.seq = seq
         self.ver = ver
         self.sender = sender
+
+        # TCP transporter fields (Moleculer.js Node compatible)
+        self.port: int = 0  # TCP listening port
+        self.udp_address: str | None = None  # UDP discovery address
 
         # Phase 5.1: Extended metrics
         self.cpuSeq = cpu_seq  # Moleculer.js compatible name
@@ -409,6 +415,7 @@ class NodeCatalog:
         node.client = payload.get("client")
         node.metadata = payload.get("metadata", {})
         node.seq = payload.get("seq", 0)
+        node.port = payload.get("port", 0)
 
         # Phase 5.1: Update extended metrics
         node.cpuSeq = payload.get("cpuSeq", 0)

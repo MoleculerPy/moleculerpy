@@ -17,6 +17,10 @@ class Topic(Enum):
     # Phase 5: Latency measurement
     PING = "PING"
     PONG = "PONG"
+    # TCP Gossip protocol (P2P discovery without external broker)
+    GOSSIP_HELLO = "GOSSIP_HELLO"
+    GOSSIP_REQ = "GOSSIP_REQ"
+    GOSSIP_RES = "GOSSIP_RES"
 
 
 class Packet:
