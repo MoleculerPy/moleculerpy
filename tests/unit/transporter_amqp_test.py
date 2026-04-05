@@ -283,7 +283,8 @@ class TestAmqpSend:
         t = _make_transporter()
         mock_channel = AsyncMock()
         mock_exchange = AsyncMock()
-        mock_channel.get_exchange = AsyncMock(return_value=mock_exchange)
+        # declare_exchange returns an exchange for broadcast publish
+        mock_channel.declare_exchange = AsyncMock(return_value=mock_exchange)
         mock_channel.default_exchange = mock_exchange
         t._channel = mock_channel
 
@@ -291,7 +292,8 @@ class TestAmqpSend:
         packet.target = None
         await t.publish(packet)
 
-        # Verify serialization happened (exchange.publish was called)
+        # Broadcast: declare_exchange called, then exchange.publish
+        mock_channel.declare_exchange.assert_awaited_once()
         assert mock_exchange.publish.called
 
 
