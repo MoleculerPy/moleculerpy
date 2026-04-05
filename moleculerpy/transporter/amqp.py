@@ -422,12 +422,11 @@ class AmqpTransporter(Transporter):
             await self._channel.default_exchange.publish(message, routing_key=topic)
         else:
             # Fanout exchange publish (broadcast)
-            try:
-                exchange = await self._channel.get_exchange(topic, ensure=False)
-                await exchange.publish(message, routing_key="")
-            except Exception:
-                # Exchange might not exist yet — use default exchange
-                await self._channel.default_exchange.publish(message, routing_key=topic)
+            # Declare exchange (idempotent) before publish — matches Node.js channel.publish()
+            exchange = await self._channel.declare_exchange(
+                topic, aio_pika.ExchangeType.FANOUT, **self.exchange_options
+            )
+            await exchange.publish(message, routing_key="")
 
     async def receive(self, cmd: str, data: bytes, meta: dict[str, Any]) -> None:
         """Process received bytes after middleware. Deserialize and call handler."""

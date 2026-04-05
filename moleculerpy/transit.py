@@ -39,8 +39,16 @@ DEFAULT_ACK_TIMEOUT: float = 5.0
 # Protocol version this node speaks (Moleculer v4)
 PROTOCOL_VERSION: str = "4"
 
-# Broadcast topics where a node legitimately receives its own packets
-_SELF_ECHO_TOPICS: frozenset[Topic] = frozenset({Topic.DISCOVER, Topic.HEARTBEAT, Topic.INFO})
+# Broadcast topics where a node legitimately receives its own packets.
+# With fanout transports (AMQP), ALL broadcast packets echo back to sender.
+_SELF_ECHO_TOPICS: frozenset[Topic] = frozenset(
+    {
+        Topic.DISCOVER,
+        Topic.HEARTBEAT,
+        Topic.INFO,
+        Topic.DISCONNECT,
+    }
+)
 
 
 class Transit:
