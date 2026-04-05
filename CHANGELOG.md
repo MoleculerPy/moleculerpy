@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.18] - 2026-04-06
+
+### Added
+- **CBOR Serializer** (PRD-019) — compact binary serialization without schema:
+  - `CborSerializer` using `cbor2` library, ~29% smaller than JSON
+  - Schema-less, wire-compatible with Node.js Moleculer CborSerializer (cbor-x)
+  - `pip install moleculerpy[cbor]`
+- **ProtoBuf Serializer** (PRD-019) — schema-based binary serialization:
+  - `ProtoBufSerializer` using Google Protocol Buffers, ~25% smaller than JSON
+  - `packets.proto` schema from Node.js Moleculer (all 12 packet types)
+  - Custom field conversion matching Node.js base.js (services, meta, params → JSON strings)
+  - `pip install moleculerpy[protobuf]`
+- Serializers now 4/8: JSON, MsgPack, CBOR, ProtoBuf
+- `Settings(serializer="cbor")` and `Settings(serializer="protobuf")` now accepted
+
 ## [0.14.17] - 2026-04-06
 
 ### Added

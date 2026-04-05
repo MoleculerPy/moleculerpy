@@ -61,7 +61,7 @@ class Settings:
 
     VALID_LOG_LEVELS: ClassVar[set[str]] = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
     VALID_LOG_FORMATS: ClassVar[set[str]] = {"PLAIN", "JSON"}
-    VALID_SERIALIZERS: ClassVar[set[str]] = {"JSON", "MSGPACK"}
+    VALID_SERIALIZERS: ClassVar[set[str]] = {"JSON", "MSGPACK", "CBOR", "PROTOBUF"}
     VALID_STRATEGIES: ClassVar[set[str]] = {"ROUNDROBIN", "RANDOM", "CPUUSAGE", "SHARD", "LATENCY"}
 
     def __init__(

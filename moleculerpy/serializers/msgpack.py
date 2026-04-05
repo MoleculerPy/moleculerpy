@@ -38,7 +38,7 @@ class MsgPackSerializer(BaseSerializer):
         if not MSGPACK_AVAILABLE:
             raise ImportError("msgpack package required. Install: pip install moleculerpy[msgpack]")
 
-    def serialize(self, payload: dict[str, Any]) -> bytes:
+    def serialize(self, payload: dict[str, Any], packet_type: str | None = None) -> bytes:
         """Serialize payload to MsgPack bytes.
 
         Args:
@@ -59,7 +59,7 @@ class MsgPackSerializer(BaseSerializer):
                 raise
             raise SerializationError(f"MsgPack serialize failed: {e}") from e
 
-    def deserialize(self, data: bytes) -> dict[str, Any]:
+    def deserialize(self, data: bytes, packet_type: str | None = None) -> dict[str, Any]:
         """Deserialize MsgPack bytes to payload dict.
 
         Args:

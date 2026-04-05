@@ -20,7 +20,7 @@ class JsonSerializer(BaseSerializer):
     Compatible with Moleculer.js default serializer.
     """
 
-    def serialize(self, payload: dict[str, Any]) -> bytes:
+    def serialize(self, payload: dict[str, Any], packet_type: str | None = None) -> bytes:
         """Serialize payload to JSON bytes.
 
         Args:
@@ -37,7 +37,7 @@ class JsonSerializer(BaseSerializer):
         except (TypeError, ValueError) as e:
             raise SerializationError(f"JSON serialize failed: {e}") from e
 
-    def deserialize(self, data: bytes) -> dict[str, Any]:
+    def deserialize(self, data: bytes, packet_type: str | None = None) -> dict[str, Any]:
         """Deserialize JSON bytes to payload dict.
 
         Args:

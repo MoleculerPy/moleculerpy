@@ -143,7 +143,9 @@ class NatsTransporter(Transporter):
 
         topic = self.get_topic_name(packet.type.value, packet.target)
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        serialized_payload = await self.transit.serializer.serialize_async(payload)
+        serialized_payload = await self.transit.serializer.serialize_async(
+            payload, packet_type=packet.type.value
+        )
 
         # Send through middleware chain
         meta = {"packet": packet}
