@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "moleculerpy"
-version = "0.14.13"
+version = "0.14.14"
 description = "Fast, modern microservices framework for Python - Port of Moleculer.js"
 authors = [
     { name = "Eli Rum", email = "explosivebit@gmail.com" }
@@ -72,6 +72,10 @@ tracing = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp>=1.20.0"
+]
+
+mqtt = [
+    "aiomqtt>=2.0.0"
 ]
 
 # Alternative transporters

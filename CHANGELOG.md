@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.14] - 2026-04-05
+
+### Added
+- **MQTT Transporter** (PRD-016) — lightweight pub/sub for IoT and edge computing:
+  - `MqttTransporter` class with full Moleculer protocol v4 compatibility
+  - Configurable QoS (0, 1, 2) and topic separator (default ".")
+  - Lazy import of `aiomqtt` — graceful error when not installed
+  - Wire-compatible with Node.js MqttTransporter topic format
+  - Reconnect guard: safe to call connect() on already-connected transporter
+  - Zombie state protection: broken connections detected and cleaned up
+  - IPv6 address support in connection strings
+  - `mqtts://` explicitly rejected until TLS support is added (prevents silent security issue)
+  - 46 unit tests + 6 integration tests with Docker Mosquitto
+  - Registered in transporter registry: `Settings(transporter="mqtt://host:1883")`
+
 ## [0.14.13] - 2026-04-05
 
 ### Fixed
