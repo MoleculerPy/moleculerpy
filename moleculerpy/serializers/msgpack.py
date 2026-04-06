@@ -10,13 +10,14 @@ from typing import Any
 
 from ..errors import SerializationError
 from .base import BaseSerializer
+from .types import PacketType
 
 try:
-    import msgpack
+    import msgpack as _msgpack
 
     MSGPACK_AVAILABLE = True
 except ImportError:
-    msgpack = None
+    _msgpack = None  # type: ignore[assignment,unused-ignore]
     MSGPACK_AVAILABLE = False
 
 
@@ -25,61 +26,44 @@ class MsgPackSerializer(BaseSerializer):
 
     Provides compact binary serialization using the msgpack library.
     Typically 20-30% smaller and faster than JSON for structured data.
+    Schema-less — `packet_type` parameter is ignored.
 
     Requires the msgpack package to be installed.
     """
+
+    __slots__ = ("_mp",)
 
     def __init__(self) -> None:
         """Initialize MsgPackSerializer.
 
         Raises:
-            ImportError: If msgpack package is not installed
+            ImportError: If msgpack package is not installed.
         """
-        if not MSGPACK_AVAILABLE:
+        if not MSGPACK_AVAILABLE or _msgpack is None:
             raise ImportError("msgpack package required. Install: pip install moleculerpy[msgpack]")
+        # Store-on-self: mypy narrows the type, no runtime None checks in hot path.
+        self._mp = _msgpack
 
-    def serialize(self, payload: dict[str, Any], packet_type: str | None = None) -> bytes:
-        """Serialize payload to MsgPack bytes.
-
-        Args:
-            payload: Dictionary to serialize
-
-        Returns:
-            MsgPack encoded bytes
-
-        Raises:
-            SerializationError: If payload contains non-serializable types
-        """
-        assert msgpack is not None
+    def _serialize_impl(self, payload: dict[str, Any], packet_type: PacketType | None) -> bytes:
+        """Serialize payload to MsgPack bytes (packet_type ignored)."""
         try:
-            result: bytes = msgpack.packb(payload, use_bin_type=True)
+            result: bytes = self._mp.packb(payload, use_bin_type=True)
             return result
+        except SerializationError:
+            raise
         except Exception as e:
-            if isinstance(e, SerializationError):
-                raise
             raise SerializationError(f"MsgPack serialize failed: {e}") from e
 
-    def deserialize(self, data: bytes, packet_type: str | None = None) -> dict[str, Any]:
-        """Deserialize MsgPack bytes to payload dict.
-
-        Args:
-            data: MsgPack encoded bytes
-
-        Returns:
-            Deserialized dictionary
-
-        Raises:
-            SerializationError: If data is not valid MsgPack or not a dict
-        """
-        assert msgpack is not None
+    def _deserialize_impl(self, data: bytes, packet_type: PacketType | None) -> dict[str, Any]:
+        """Deserialize MsgPack bytes to payload dict (packet_type ignored)."""
         try:
-            result = msgpack.unpackb(data, raw=False, strict_map_key=True)
+            result = self._mp.unpackb(data, raw=False, strict_map_key=True)
             if not isinstance(result, dict):
                 raise SerializationError(
                     f"Expected dict from MsgPack deserialization, got {type(result).__name__}"
                 )
             return result
+        except SerializationError:
+            raise
         except Exception as e:
-            if isinstance(e, SerializationError):
-                raise
             raise SerializationError(f"MsgPack deserialize failed: {e}") from e

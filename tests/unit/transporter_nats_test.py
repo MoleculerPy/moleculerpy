@@ -135,8 +135,14 @@ class TestNatsTransporter:
         assert transporter.nc is None
 
     @pytest.mark.asyncio
-    async def test_disconnect_timeout_keeps_client_reference(self):
-        """Timeout should keep client reference so caller can retry/inspect cleanup."""
+    async def test_disconnect_timeout_clears_client_reference(self):
+        """Timeout should clear client reference — dead connection should not be reused.
+
+        Previously this test expected the reference to be kept, but async-reviewer
+        audit flagged this as a bug: on TimeoutError the connection is effectively
+        dead and reusing it leads to stuck state. Fixed in v0.14.19 by moving
+        `self.nc = None` into the `finally` block.
+        """
         transporter = NatsTransporter(
             connection_string="nats://localhost:4222",
             transit=_mock_transit(),
@@ -154,11 +160,15 @@ class TestNatsTransporter:
             monkeypatch.setattr("moleculerpy.transporter.nats.asyncio.wait_for", fake_wait_for)
             await transporter.disconnect()
 
-        assert transporter.nc is nc
+        # Reference cleared even on timeout — dead connection should not be reused.
+        assert transporter.nc is None
 
     @pytest.mark.asyncio
-    async def test_disconnect_exception_keeps_client_reference(self):
-        """Unexpected close exception should keep client reference."""
+    async def test_disconnect_exception_clears_client_reference(self):
+        """Unexpected close exception should clear client reference.
+
+        Same rationale as test_disconnect_timeout_clears_client_reference — see audit fix.
+        """
         transporter = NatsTransporter(
             connection_string="nats://localhost:4222",
             transit=_mock_transit(),
@@ -176,7 +186,8 @@ class TestNatsTransporter:
             monkeypatch.setattr("moleculerpy.transporter.nats.asyncio.wait_for", fake_wait_for)
             await transporter.disconnect()
 
-        assert transporter.nc is nc
+        # Reference cleared even on unexpected exception — dead connection should not be reused.
+        assert transporter.nc is None
 
     @pytest.mark.asyncio
     async def test_receive_offloads_large_json_deserialize(self):

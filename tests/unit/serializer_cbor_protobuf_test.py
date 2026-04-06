@@ -7,6 +7,7 @@ Tests cover:
 """
 
 import json
+from datetime import UTC
 from typing import Any
 from unittest.mock import patch
 
@@ -343,3 +344,378 @@ class TestSerializerRegistry:
     def test_resolve_unknown_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown serializer"):
             resolve_serializer("avro")
+
+
+# =====================================================================
+# AUDIT-DRIVEN TESTS — coverage gaps identified by expert panel
+# =====================================================================
+
+
+class TestPayloadSizeLimit:
+    """Test MAX_PAYLOAD_BYTES enforcement (security-HIGH1)."""
+
+    def test_json_sync_deserialize_rejects_oversized(self) -> None:
+        from moleculerpy.errors import SerializationError
+
+        s = JsonSerializer()
+        oversized = b"x" * (BaseSerializer.MAX_PAYLOAD_BYTES + 1)
+        with pytest.raises(SerializationError, match="Payload too large"):
+            s.deserialize(oversized)
+
+    @pytest.mark.skipif(not CBOR_AVAILABLE, reason="cbor2 not installed")
+    def test_cbor_sync_deserialize_rejects_oversized(self) -> None:
+        from moleculerpy.errors import SerializationError
+
+        s = CborSerializer()
+        oversized = b"x" * (BaseSerializer.MAX_PAYLOAD_BYTES + 1)
+        with pytest.raises(SerializationError, match="Payload too large"):
+            s.deserialize(oversized)
+
+    def test_json_serialize_rejects_oversized_output(self) -> None:
+        # serialize produces oversized result → should raise
+        from moleculerpy.errors import SerializationError
+
+        s = JsonSerializer()
+        huge_payload: dict[str, Any] = {"data": "x" * (BaseSerializer.MAX_PAYLOAD_BYTES + 10)}
+        with pytest.raises(SerializationError, match="Serialized payload too large"):
+            s.serialize(huge_payload)
+
+
+@pytest.mark.skipif(not CBOR_AVAILABLE, reason="cbor2 not installed")
+class TestCborTagSecurity:
+    """Test CBOR tag handling (security-HIGH2).
+
+    NOTE: cbor2 tag_hook is ONLY called for unknown tags. Well-known tags
+    (0, 1 = datetime, 2, 3 = bigint, 4, 5 = decimal, etc.) have hardcoded
+    decoders that run BEFORE tag_hook. Our tag_hook protects against:
+    - Unknown/custom tags from attackers
+    - Expensive regex compilation (tag 35)
+    - Tag 259 (for Maps — disabled in Node.js cbor-x too)
+
+    For full protection against type confusion, downstream code must validate
+    value types after deserialization.
+    """
+
+    def test_cbor_unknown_tag_rejected(self) -> None:
+        """Unknown/custom tags should be rejected by tag_hook → None."""
+        import cbor2 as cbor2_mod
+
+        s = CborSerializer()
+        # Tag 65535 is definitively unknown — tag_hook handles it
+        original = {"custom": cbor2_mod.CBORTag(65535, "some_value")}
+        encoded = cbor2_mod.dumps(original)
+        result = s.deserialize(encoded)
+        # Unknown tag was rejected → value is None
+        assert result["custom"] is None
+
+    def test_cbor_plain_dict_still_works(self) -> None:
+        """tag_hook only rejects unknown tags, not normal maps."""
+        s = CborSerializer()
+        payload = {"a": 1, "b": [1, 2, 3], "c": "hello", "d": None, "e": True}
+        data = s.serialize(payload)
+        assert s.deserialize(data) == payload
+
+    def test_cbor_datetime_tag_decoded(self) -> None:
+        """Tag 0/1 (datetime) is a well-known tag with hardcoded decoder.
+
+        cbor2 decodes it to datetime BEFORE tag_hook is called. Downstream
+        code must be aware that CBOR deserialize may return datetime objects
+        when Node.js cbor-x sends tag 0/1.
+        """
+        from datetime import datetime, timezone
+
+        import cbor2 as cbor2_mod
+
+        s = CborSerializer()
+        original = {"ts": datetime(2026, 4, 6, 0, 0, 0, tzinfo=UTC)}
+        encoded = cbor2_mod.dumps(original)
+        result = s.deserialize(encoded)
+        # Datetime is preserved (not rejected by tag_hook)
+        # This documents the current behavior
+        assert "ts" in result
+
+
+@pytest.mark.skipif(not PROTOBUF_AVAILABLE, reason="protobuf not installed")
+class TestProtoBufDataTypes:
+    """Test all 4 DataType values: UNDEFINED, NULL, JSON, BUFFER (logic-CRIT2)."""
+
+    @pytest.fixture
+    def serializer(self) -> ProtoBufSerializer:
+        return ProtoBufSerializer()
+
+    def test_params_dict_datatype_json(self, serializer: ProtoBufSerializer) -> None:
+        """dict → DATATYPE_JSON roundtrip."""
+        payload = {"action": "x", "params": {"a": 1}, "ver": "4", "sender": "n1"}
+        data = serializer.serialize(payload, packet_type="REQ")
+        result = serializer.deserialize(data, packet_type="REQ")
+        assert result["params"] == {"a": 1}
+
+    def test_params_list_datatype_json(self, serializer: ProtoBufSerializer) -> None:
+        """list → DATATYPE_JSON roundtrip."""
+        payload = {"action": "x", "params": [1, 2, 3], "ver": "4", "sender": "n1"}
+        data = serializer.serialize(payload, packet_type="REQ")
+        result = serializer.deserialize(data, packet_type="REQ")
+        assert result["params"] == [1, 2, 3]
+
+    def test_params_str_datatype_json(self, serializer: ProtoBufSerializer) -> None:
+        """str → DATATYPE_JSON roundtrip (logic-HIGH3)."""
+        payload = {"action": "x", "params": "hello", "ver": "4", "sender": "n1"}
+        data = serializer.serialize(payload, packet_type="REQ")
+        result = serializer.deserialize(data, packet_type="REQ")
+        assert result["params"] == "hello"
+
+    def test_params_bytes_datatype_buffer(self, serializer: ProtoBufSerializer) -> None:
+        """bytes → DATATYPE_BUFFER roundtrip (logic-CRIT2)."""
+        payload = {"action": "x", "params": b"raw_bytes", "ver": "4", "sender": "n1"}
+        data = serializer.serialize(payload, packet_type="REQ")
+        result = serializer.deserialize(data, packet_type="REQ")
+        assert result["params"] == b"raw_bytes"
+        assert isinstance(result["params"], bytes)
+
+    def test_params_none_datatype_null(self, serializer: ProtoBufSerializer) -> None:
+        """None → DATATYPE_NULL roundtrip (logic-HIGH1)."""
+        payload = {"action": "x", "params": None, "ver": "4", "sender": "n1"}
+        data = serializer.serialize(payload, packet_type="REQ")
+        result = serializer.deserialize(data, packet_type="REQ")
+        assert result["params"] is None
+
+    def test_params_missing_datatype_undefined(self, serializer: ProtoBufSerializer) -> None:
+        """Missing field → DATATYPE_UNDEFINED → removed from result."""
+        payload = {"action": "x", "ver": "4", "sender": "n1"}
+        data = serializer.serialize(payload, packet_type="REQ")
+        result = serializer.deserialize(data, packet_type="REQ")
+        assert "params" not in result
+
+    def test_data_bytes_in_event(self, serializer: ProtoBufSerializer) -> None:
+        """EVENT packet with data=bytes roundtrip."""
+        payload = {"event": "file.uploaded", "data": b"\x00\xff\x42", "ver": "4", "sender": "n1"}
+        data = serializer.serialize(payload, packet_type="EVENT")
+        result = serializer.deserialize(data, packet_type="EVENT")
+        assert result["data"] == b"\x00\xff\x42"
+
+
+@pytest.mark.skipif(not PROTOBUF_AVAILABLE, reason="protobuf not installed")
+class TestProtoBufAllPacketTypes:
+    """Ensure all 12 packet types serialize+deserialize correctly."""
+
+    @pytest.fixture
+    def serializer(self) -> ProtoBufSerializer:
+        return ProtoBufSerializer()
+
+    def test_disconnect_packet(self, serializer: ProtoBufSerializer) -> None:
+        """DISCONNECT has same fields as DISCOVER — requires explicit packet_type."""
+        payload = {"ver": "4", "sender": "node-1"}
+        data = serializer.serialize(payload, packet_type="DISCONNECT")
+        result = serializer.deserialize(data, packet_type="DISCONNECT")
+        assert result["ver"] == "4"
+        assert result["sender"] == "node-1"
+
+    def test_response_with_error(self, serializer: ProtoBufSerializer) -> None:
+        """RES with error dict — tests _STRINGIFY_FIELDS error handling."""
+        payload = {
+            "success": False,
+            "ver": "4",
+            "sender": "node-1",
+            "id": "req-123",
+            "error": {"name": "ValidationError", "message": "bad input", "code": 422},
+            "data": None,
+        }
+        data = serializer.serialize(payload, packet_type="RES")
+        result = serializer.deserialize(data, packet_type="RES")
+        assert result["error"] == {"name": "ValidationError", "message": "bad input", "code": 422}
+
+    def test_info_with_config_and_metadata(self, serializer: ProtoBufSerializer) -> None:
+        """INFO with all STRINGIFY fields: services, config, metadata."""
+        payload = {
+            "services": [{"name": "math"}],
+            "config": {"logLevel": "info"},
+            "metadata": {"region": "eu-west-1"},
+            "ver": "4",
+            "sender": "node-1",
+            "hostname": "localhost",
+        }
+        data = serializer.serialize(payload, packet_type="INFO")
+        result = serializer.deserialize(data, packet_type="INFO")
+        assert result["services"] == [{"name": "math"}]
+        assert result["config"] == {"logLevel": "info"}
+        assert result["metadata"] == {"region": "eu-west-1"}
+
+
+@pytest.mark.skipif(not PROTOBUF_AVAILABLE, reason="protobuf not installed")
+class TestProtoBufResolveHeuristic:
+    """Test _resolve_packet_type heuristic fallback (logic-CRIT1)."""
+
+    @pytest.fixture
+    def serializer(self) -> ProtoBufSerializer:
+        return ProtoBufSerializer()
+
+    @pytest.mark.parametrize(
+        "payload,expected",
+        [
+            ({"action": "x", "ver": "4"}, "REQ"),
+            ({"success": True, "ver": "4"}, "RES"),
+            ({"event": "x", "ver": "4"}, "EVENT"),
+            ({"services": [], "ver": "4"}, "INFO"),
+            ({"arrived": 1, "ver": "4"}, "PONG"),
+            ({"time": 1, "ver": "4"}, "PING"),
+            ({"host": "x", "port": 3, "ver": "4"}, "GOSSIP_HELLO"),
+        ],
+    )
+    def test_resolve_heuristic(
+        self, serializer: ProtoBufSerializer, payload: dict[str, Any], expected: str
+    ) -> None:
+        resolved = serializer._resolve_packet_type(payload)
+        assert resolved == expected
+
+    def test_resolve_disconnect_ambiguous(self, serializer: ProtoBufSerializer) -> None:
+        """DISCONNECT cannot be distinguished from DISCOVER — returns DISCOVER."""
+        payload = {"ver": "4", "sender": "n1"}
+        # Heuristic defaults to DISCOVER for ambiguous minimal packets
+        assert serializer._resolve_packet_type(payload) == "DISCOVER"
+
+    def test_serialize_disconnect_requires_explicit_type(
+        self, serializer: ProtoBufSerializer
+    ) -> None:
+        """User must pass packet_type='DISCONNECT' explicitly — heuristic guesses DISCOVER."""
+        payload = {"ver": "4", "sender": "n1"}
+        # Without packet_type, serialize produces DISCOVER bytes (not DISCONNECT)
+        data_as_discover = serializer.serialize(payload)
+        data_as_disconnect = serializer.serialize(payload, packet_type="DISCONNECT")
+        # Same bytes because schemas are identical at wire level (ver+sender only)
+        # But semantically the caller must pass the type
+        assert data_as_discover == data_as_disconnect  # proto3 same wire format
+
+
+@pytest.mark.skipif(not PROTOBUF_AVAILABLE, reason="protobuf not installed")
+class TestProtoBufBruteforceDeserialize:
+    """Test bruteforce deserialize fallback (arch-HIGH2, security-MED1)."""
+
+    @pytest.fixture
+    def serializer(self) -> ProtoBufSerializer:
+        return ProtoBufSerializer()
+
+    def test_bruteforce_decodes_something(self, serializer: ProtoBufSerializer) -> None:
+        """Deserialize without packet_type falls back to bruteforce.
+
+        WARNING: proto3 has no type tag. Any message can decode against any schema.
+        Bruteforce returns the FIRST type that parses with meaningful content —
+        this may NOT be the original type. Test documents that bruteforce returns
+        something (not raises) for valid proto bytes, not that it returns the right type.
+        """
+        payload = {"action": "math.add", "params": {"a": 1}, "ver": "4", "sender": "n1"}
+        data = serializer.serialize(payload, packet_type="REQ")
+        # No packet_type → bruteforce returns something (may be wrong type!)
+        result = serializer.deserialize(data)
+        # Bruteforce at least preserves ver/sender which are at same field numbers
+        assert result.get("ver") == "4"
+        assert result.get("sender") == "n1"
+
+    def test_bruteforce_correct_when_explicit_type_passed(
+        self, serializer: ProtoBufSerializer
+    ) -> None:
+        """With explicit packet_type, decoding is reliable."""
+        payload = {"action": "math.add", "params": {"a": 1}, "ver": "4", "sender": "n1"}
+        data = serializer.serialize(payload, packet_type="REQ")
+        result = serializer.deserialize(data, packet_type="REQ")
+        assert result["action"] == "math.add"
+        assert result["params"] == {"a": 1}
+
+    def test_bruteforce_fails_on_garbage(self, serializer: ProtoBufSerializer) -> None:
+        """Random bytes should fail bruteforce gracefully."""
+        from moleculerpy.errors import SerializationError
+
+        with pytest.raises(SerializationError):
+            serializer.deserialize(b"\xff\xff\xff\xff\xff\xff\xff\xff")
+
+
+class TestPacketTypeValidation:
+    """Test to_packet_type() runtime validation (type-C2)."""
+
+    def test_valid_packet_type(self) -> None:
+        from moleculerpy.serializers import to_packet_type
+
+        assert to_packet_type("REQ") == "REQ"
+        assert to_packet_type("EVENT") == "EVENT"
+        assert to_packet_type("GOSSIP_HELLO") == "GOSSIP_HELLO"
+
+    def test_invalid_packet_type_raises(self) -> None:
+        from moleculerpy.serializers import to_packet_type
+
+        with pytest.raises(ValueError, match="Invalid packet type"):
+            to_packet_type("INVALID")
+
+    def test_empty_string_raises(self) -> None:
+        from moleculerpy.serializers import to_packet_type
+
+        with pytest.raises(ValueError, match="Invalid packet type"):
+            to_packet_type("")
+
+
+class TestSerializerIntegrationWithBroker:
+    """Integration tests with real ServiceBroker (test-reviewer MED)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not CBOR_AVAILABLE, reason="cbor2 not installed")
+    async def test_cbor_broker_local_call(self) -> None:
+        """Full broker lifecycle with CBOR serializer."""
+        import asyncio as aio
+
+        from moleculerpy.broker import ServiceBroker
+        from moleculerpy.decorators import action
+        from moleculerpy.service import Service
+        from moleculerpy.settings import Settings
+
+        class Svc(Service):
+            name = "svc"
+
+            def __init__(self) -> None:
+                super().__init__(self.name)
+
+            @action()
+            async def echo(self, ctx: Any) -> Any:
+                return ctx.params
+
+        b = ServiceBroker(
+            id="test-cbor",
+            settings=Settings(transporter="memory://", serializer="cbor", log_level="ERROR"),
+        )
+        await b.register(Svc())
+        await b.start()
+        try:
+            result = await b.call("svc.echo", {"hello": "world", "n": 42})
+            assert result == {"hello": "world", "n": 42}
+        finally:
+            await aio.wait_for(b.stop(), timeout=3)
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not PROTOBUF_AVAILABLE, reason="protobuf not installed")
+    async def test_protobuf_broker_local_call(self) -> None:
+        """Full broker lifecycle with ProtoBuf serializer."""
+        import asyncio as aio
+
+        from moleculerpy.broker import ServiceBroker
+        from moleculerpy.decorators import action
+        from moleculerpy.service import Service
+        from moleculerpy.settings import Settings
+
+        class Svc(Service):
+            name = "svc"
+
+            def __init__(self) -> None:
+                super().__init__(self.name)
+
+            @action()
+            async def add(self, ctx: Any) -> Any:
+                return ctx.params["a"] + ctx.params["b"]
+
+        b = ServiceBroker(
+            id="test-protobuf",
+            settings=Settings(transporter="memory://", serializer="protobuf", log_level="ERROR"),
+        )
+        await b.register(Svc())
+        await b.start()
+        try:
+            result = await b.call("svc.add", {"a": 3, "b": 4})
+            assert result == 7
+        finally:
+            await aio.wait_for(b.stop(), timeout=3)

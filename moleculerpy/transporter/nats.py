@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from ..transit import Transit
 
 from ..packet import Packet
+from ..serializers import to_packet_type
 from .base import Transporter
 
 # Moleculer protocol version (must match transit.PROTOCOL_VERSION)
@@ -108,15 +109,17 @@ class NatsTransporter(Transporter):
             data: Raw message bytes (potentially decompressed/decrypted)
             meta: Metadata containing packet_type, subject, etc.
         """
-        try:
-            payload = await self.transit.serializer.deserialize_async(data)
-        except Exception as e:
-            logger.warning("Failed to decode NATS message, dropping: %r", e)
-            return
-
         packet_type = meta.get("packet_type")
         if packet_type is None:
             raise ValueError("packet_type missing from meta")
+
+        try:
+            payload = await self.transit.serializer.deserialize_async(
+                data, packet_type=to_packet_type(packet_type.value)
+            )
+        except Exception as e:
+            logger.warning("Failed to decode NATS message, dropping: %r", e)
+            return
 
         sender = payload.get("sender")
         packet = Packet(packet_type, sender, payload)
@@ -144,7 +147,7 @@ class NatsTransporter(Transporter):
         topic = self.get_topic_name(packet.type.value, packet.target)
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
         serialized_payload = await self.transit.serializer.serialize_async(
-            payload, packet_type=packet.type.value
+            payload, packet_type=to_packet_type(packet.type.value)
         )
 
         # Send through middleware chain
@@ -189,7 +192,9 @@ class NatsTransporter(Transporter):
             except Exception:
                 # Log the error but don't raise to ensure cleanup continues
                 logger.exception("Failed to close NATS connection cleanly")
-            else:
+            finally:
+                # Always clear the reference — even on timeout/error, the connection
+                # is effectively dead and should not be reused.
                 self.nc = None
 
     async def subscribe(self, command: str, topic: str | None = None) -> None:
@@ -256,7 +261,9 @@ class NatsTransporter(Transporter):
             return
         topic = f"MOL.REQB.{action}"
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        data = await self.transit.serializer.serialize_async(payload)
+        data = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
         await self.send_with_middleware(topic, data, {"packet": packet})
 
     async def publish_balanced_event(self, packet: Packet, group: str) -> None:
@@ -274,7 +281,9 @@ class NatsTransporter(Transporter):
             return
         topic = f"MOL.EVENTB.{group}.{event}"
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        data = await self.transit.serializer.serialize_async(payload)
+        data = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
         await self.send_with_middleware(topic, data, {"packet": packet})
 
     async def unsubscribe_from_balanced_commands(self) -> None:
