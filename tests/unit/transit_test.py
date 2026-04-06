@@ -1677,3 +1677,86 @@ class TestHeartbeatDiscovery:
 
             transit.discover_node.assert_not_awaited()
             transit.node_catalog.get_node.assert_not_called()
+
+
+class TestRequestDiscovery:
+    """Tests for _request_discovery rate-limiting and _handle_discover targeted reply."""
+
+    @pytest.mark.asyncio
+    async def test_request_discovery_cooldown(self, mock_dependencies, mock_transporter):
+        """Second DISCOVER within cooldown is skipped."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            transit.discover_node = AsyncMock()
+
+            await transit._request_discovery("node-X", "unknown")
+            assert transit.discover_node.await_count == 1
+
+            # Second call within cooldown — should be skipped
+            await transit._request_discovery("node-X", "unknown")
+            assert transit.discover_node.await_count == 1  # Still 1
+
+    @pytest.mark.asyncio
+    async def test_request_discovery_error_clears_pending(
+        self, mock_dependencies, mock_transporter
+    ):
+        """If discover_node raises, pending entry is cleared for retry."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            transit.discover_node = AsyncMock(side_effect=RuntimeError("disconnected"))
+
+            await transit._request_discovery("node-Y", "offline")
+
+            # Should have cleared pending so retry is possible
+            assert "node-Y" not in transit._discover_pending
+
+    @pytest.mark.asyncio
+    async def test_handle_discover_targeted_reply(self, mock_dependencies, mock_transporter):
+        """Targeted DISCOVER replies with targeted INFO to sender."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            transit.publish = AsyncMock()
+            mock_local = MagicMock()
+            mock_local.get_info.return_value = {"id": "test-node-123", "services": []}
+            transit.node_catalog = MagicMock()
+            transit.node_catalog.local_node = mock_local
+
+            packet = Packet(Topic.DISCOVER, "requester-node", {})
+            packet.sender = "requester-node"
+            await transit._handle_discover(packet)
+
+            transit.publish.assert_awaited_once()
+            info_packet = transit.publish.call_args[0][0]
+            assert info_packet.type == Topic.INFO
+            assert info_packet.target == "requester-node"
+
+    @pytest.mark.asyncio
+    async def test_handle_discover_broadcast_reply(self, mock_dependencies, mock_transporter):
+        """Broadcast DISCOVER (no sender) replies with broadcast INFO."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            transit.send_node_info = AsyncMock()
+
+            packet = Packet(Topic.DISCOVER, None, {})
+            packet.sender = None
+            await transit._handle_discover(packet)
+
+            transit.send_node_info.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_info_clears_discover_pending(self, mock_dependencies, mock_transporter):
+        """Receiving INFO clears _discover_pending for that node."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            transit._discover_pending["remote-node"] = 1000.0
+
+            # Mock node_catalog to accept the INFO
+            transit.node_catalog = MagicMock()
+            transit.node_catalog.local_node = MagicMock()
+            transit.node_catalog.process_node_info = MagicMock()
+
+            packet = Packet(Topic.INFO, "remote-node", {"id": "remote-node"})
+            packet.sender = "remote-node"
+            await transit._handle_info(packet)
+
+            assert "remote-node" not in transit._discover_pending
