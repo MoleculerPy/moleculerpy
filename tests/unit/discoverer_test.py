@@ -479,3 +479,70 @@ class TestDiscovererLifecycle:
         d, _, _ = _make_discoverer(heartbeat_interval=0)
         await d.start()
         assert len(d._tasks) == 0
+
+
+class TestDiscovererTimerIntegration:
+    """Integration tests that exercise the actual timer loop bodies."""
+
+    @pytest.mark.asyncio
+    async def test_check_nodes_timer_fires(self):
+        """check_remote_nodes timer fires and disconnects timed-out node."""
+        d, broker, transit = _make_discoverer(heartbeat_timeout=0.3)
+        node = MagicMock()
+        node.local = False
+        node.available = True
+        node.lastHeartbeatTime = time.time() - 10  # Already expired
+
+        transit.node_catalog.nodes = {"stale": node}
+        transit.node_catalog.disconnect_node = MagicMock()
+
+        await d.start()
+        await asyncio.sleep(0.5)  # Let timer fire once
+        await d.stop()
+
+        transit.node_catalog.disconnect_node.assert_called_with("stale", unexpected=True)
+
+    @pytest.mark.asyncio
+    async def test_clean_offline_timer_fires(self):
+        """check_offline_nodes timer fires (uses short interval for test)."""
+        d, broker, transit = _make_discoverer()
+
+        # Patch the timer interval for fast test
+        import moleculerpy.discoverer as disc_mod
+
+        original = disc_mod.OFFLINE_CHECK_INTERVAL
+        disc_mod.OFFLINE_CHECK_INTERVAL = 0.2
+
+        node = MagicMock()
+        node.local = False
+        node.available = False
+        node.lastHeartbeatTime = time.time() - 99999  # Way past timeout
+
+        transit.node_catalog.nodes = {"dead": node}
+        transit.node_catalog.remove_node = MagicMock()
+
+        try:
+            await d.start()
+            await asyncio.sleep(0.5)
+            await d.stop()
+        finally:
+            disc_mod.OFFLINE_CHECK_INTERVAL = original
+
+        transit.node_catalog.remove_node.assert_called_with("dead")
+
+    @pytest.mark.asyncio
+    async def test_check_nodes_timer_handles_error(self):
+        """check_remote_nodes error is logged, loop continues."""
+        d, broker, transit = _make_discoverer(heartbeat_timeout=0.2)
+
+        # Make nodes property raise
+        type(transit.node_catalog).nodes = property(
+            lambda self: (_ for _ in ()).throw(RuntimeError("catalog error"))
+        )
+
+        await d.start()
+        await asyncio.sleep(0.4)
+        await d.stop()
+
+        broker.logger.error.assert_called()
+        assert "Remote node check failed" in str(broker.logger.error.call_args_list)

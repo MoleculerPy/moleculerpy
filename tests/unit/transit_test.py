@@ -16,6 +16,7 @@ def mock_dependencies():
     # Ensure request_timeout is a float, not MagicMock
     mock_settings.request_timeout = 30.0
     mock_settings.serializer = "JSON"
+    mock_settings.disable_reconnect = False
     return {
         "node_id": "test-node-123",
         "registry": MagicMock(),
@@ -1760,3 +1761,58 @@ class TestRequestDiscovery:
             await transit._handle_info(packet)
 
             assert "remote-node" not in transit._discover_pending
+
+
+class TestTransitReconnect:
+    """Tests for transit.connect() auto-reconnect loop."""
+
+    @pytest.mark.asyncio
+    async def test_connect_retries_on_failure(self, mock_dependencies, mock_transporter):
+        """connect() retries after transporter failure, succeeds on second attempt."""
+        call_count = 0
+
+        async def flaky_connect():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ConnectionError("NATS unavailable")
+
+        mock_transporter.connect = flaky_connect
+        mock_transporter.make_subscriptions = AsyncMock()
+
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            transit.discover = AsyncMock()
+            transit.send_node_info = AsyncMock()
+            transit._emit_transporter_event = MagicMock()
+            # Speed up retry for test
+            transit._RECONNECT_DELAY = 0.1
+
+            await transit.connect()
+
+            assert call_count == 2  # Failed once, succeeded on retry
+            transit.discover.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_connect_raises_with_disable_reconnect(self, mock_dependencies, mock_transporter):
+        """connect() raises immediately when disable_reconnect=True."""
+        mock_transporter.connect = AsyncMock(side_effect=ConnectionError("refused"))
+
+        mock_dependencies["settings"].disable_reconnect = True
+
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            with pytest.raises(ConnectionError, match="refused"):
+                await transit.connect()
+
+    @pytest.mark.asyncio
+    async def test_connect_propagates_cancelled_error(self, mock_dependencies, mock_transporter):
+        """connect() does not retry on CancelledError."""
+        mock_transporter.connect = AsyncMock(side_effect=asyncio.CancelledError())
+
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            with pytest.raises(asyncio.CancelledError):
+                await transit.connect()
