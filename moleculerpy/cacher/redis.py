@@ -139,6 +139,11 @@ class RedisCacher(BaseCacher):
         """
         super().init(broker)
 
+        # Redis is NOT connected until start() → connect() is called.
+        # BaseCacher.init() sets connected=True (fine for MemoryCacher), but
+        # for network cachers we override back to False until actual connection.
+        self.connected = False
+
         # Create logger (use broker's logger factory)
         if hasattr(broker, "_create_logger"):
             self.logger = broker._create_logger("REDIS-CACHER")
@@ -517,9 +522,22 @@ class RedisCacher(BaseCacher):
             self.logger.error(f"Redis GET_CACHE_KEYS error: {e}")
             return []
 
-    # Lock methods (TODO: Implement Redlock for distributed locking)
-    # For now, inherit from BaseCacher which provides in-memory lock fallback
+    async def start(self) -> None:
+        """Start cacher — connect to Redis.
+
+        Called by broker during broker.start(). Matches Node.js init() behavior
+        where connection is established during broker lifecycle.
+        """
+        await self.connect()
+
+    async def stop(self) -> None:
+        """Stop cacher — disconnect from Redis.
+
+        Called by broker during broker.stop().
+        """
+        await super().stop()  # Clears in-memory locks
+        await self.disconnect()
 
     async def close(self) -> None:
-        """Close Redis connection gracefully."""
+        """Close Redis connection gracefully (alias for disconnect)."""
         await self.disconnect()
