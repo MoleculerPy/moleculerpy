@@ -10,6 +10,7 @@ Reference: sources/reference-implementations/moleculer/src/transporters/kafka.js
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -17,9 +18,7 @@ if TYPE_CHECKING:
     from ..transit import Transit
 
 from ..packet import Packet
-from .base import Transporter
-
-PROTOCOL_VERSION: str = "4"
+from .base import SubscriptionTopic, Transporter
 
 logger = logging.getLogger(__name__)
 
@@ -68,29 +67,26 @@ class KafkaTransporter(Transporter):
             producer_config: Extra AIOKafkaProducer kwargs
             consumer_config: Extra AIOKafkaConsumer kwargs
         """
-        super().__init__(self.name)
+        super().__init__(self.name, transit=transit, handler=handler, node_id=node_id, prefix="MOL")
         self.bootstrap_servers = bootstrap_servers
-        self.transit = transit
-        self.handler = handler
-        self.node_id = node_id
-        self.group_id = group_id or node_id or "moleculerpy"
+        # Per-instance unique group_id (matches Node.js moleculer kafka.js line 186:
+        # `groupId: this.broker.instanceID`). Each broker start gets its own
+        # consumer group — ensures every broker sees all historical DISCOVER/INFO
+        # messages from other nodes (via auto_offset_reset='earliest') without
+        # replaying its own old messages on restart.
+        self.group_id = group_id or f"moleculerpy-{node_id or 'default'}-{uuid.uuid4().hex[:12]}"
         self.partition = partition
         self.producer_config = producer_config or {}
         self.consumer_config = consumer_config or {}
 
-        self._producer: Any | None = None
-        self._consumer: Any | None = None
-        self._consume_task: Any | None = None
+        self._producer: Any | None = None  # AIOKafkaProducer (optional dep)
+        self._consumer: Any | None = None  # AIOKafkaConsumer (optional dep)
+        self._consume_task: asyncio.Task[None] | None = None
         self._shutting_down = False
 
-        self.prefix = "MOL"
-
-    def get_topic_name(self, command: str, node_id: str | None = None) -> str:
-        """Generate Kafka topic name. Matches Node.js getTopicName()."""
-        topic = f"{self.prefix}.{command}"
-        if node_id:
-            topic += f".{node_id}"
-        return topic
+    def _is_connected(self) -> bool:
+        """Check if Kafka producer is connected."""
+        return self._producer is not None
 
     async def connect(self) -> None:
         """Connect to Kafka — create producer.
@@ -116,17 +112,14 @@ class KafkaTransporter(Transporter):
         await self._producer.start()
         logger.info("Kafka producer connected to %s.", self.bootstrap_servers)
 
-    async def disconnect(self) -> None:
-        """Disconnect producer and consumer."""
-        self._shutting_down = True
-
-        # Stop consumer
+    async def _teardown_consumer(self) -> None:
+        """Stop consumer and consume task. Reusable by disconnect + make_subscriptions."""
         if self._consume_task and not self._consume_task.done():
             self._consume_task.cancel()
             try:
                 await self._consume_task
-            except Exception:
-                pass
+            except (asyncio.CancelledError, Exception):
+                pass  # CancelledError is BaseException in 3.9+
         self._consume_task = None
 
         if self._consumer:
@@ -135,6 +128,12 @@ class KafkaTransporter(Transporter):
             except Exception:
                 logger.debug("Failed to stop Kafka consumer cleanly")
             self._consumer = None
+
+    async def disconnect(self) -> None:
+        """Disconnect producer and consumer."""
+        self._shutting_down = True
+
+        await self._teardown_consumer()
 
         # Stop producer
         if self._producer:
@@ -155,15 +154,21 @@ class KafkaTransporter(Transporter):
         """
         pass
 
-    async def make_subscriptions(self, topics: list[dict[str, Any]]) -> None:
+    async def make_subscriptions(self, topics: list["SubscriptionTopic"]) -> None:
         """Create all topic subscriptions at once via ConsumerGroup.
 
         Matches Node.js makeSubscriptions(): creates topics, then starts
-        a single ConsumerGroup for all topics.
+        a single ConsumerGroup for all topics. Safe to call multiple times
+        (tears down existing consumer first to prevent leaks).
 
         Args:
             topics: List of {"cmd": str, "nodeID": str|None} dicts
         """
+        # Guard: tear down existing consumer before rebuilding (prevents
+        # orphaned tasks/consumers on reconnect or repeated calls).
+        if self._consumer is not None or self._consume_task is not None:
+            await self._teardown_consumer()
+
         try:
             from aiokafka import AIOKafkaConsumer  # noqa: PLC0415
         except ImportError:
@@ -175,9 +180,12 @@ class KafkaTransporter(Transporter):
 
         logger.info("Kafka subscribing to %d topics.", len(topic_names))
 
-        # Pre-create topics (matches Node.js producer.createTopics)
+        # Pre-create topics (matches Node.js producer.createTopics).
+        # TopicAlreadyExistsError is expected; other errors are logged but
+        # not fatal (Kafka auto.create.topics.enable may handle it).
         try:
             from aiokafka.admin import AIOKafkaAdminClient, NewTopic  # noqa: PLC0415
+            from aiokafka.errors import TopicAlreadyExistsError  # noqa: PLC0415
 
             admin = AIOKafkaAdminClient(bootstrap_servers=self.bootstrap_servers)
             await admin.start()
@@ -186,10 +194,16 @@ class KafkaTransporter(Transporter):
                     NewTopic(name=t, num_partitions=1, replication_factor=1) for t in topic_names
                 ]
                 await admin.create_topics(new_topics)
+            except TopicAlreadyExistsError:
+                pass  # Expected — topics pre-exist
             except Exception:
-                pass  # Topics may already exist — safe to ignore
+                logger.warning(
+                    "Kafka topic creation failed; auto-create may handle it", exc_info=True
+                )
             finally:
                 await admin.close()
+        except ImportError:
+            logger.debug("Kafka AdminClient not available — skipping topic pre-creation")
         except Exception:
             logger.debug("Kafka AdminClient topic creation skipped (auto-create may handle it)")
 
@@ -197,6 +211,14 @@ class KafkaTransporter(Transporter):
             *topic_names,
             bootstrap_servers=self.bootstrap_servers,
             group_id=self.group_id,
+            # "latest" matches Node.js Moleculer kafka.js line 187 (`fromOffset: "latest"`).
+            # Each broker uses a unique group_id (broker.instanceID pattern), so no
+            # committed offset exists → "latest" means start from end-of-stream.
+            # Initial DISCOVER may race against subscribe, but the Moleculer protocol
+            # recovers via periodic HEARTBEAT: receiving a heartbeat from an unknown
+            # sender triggers a fresh DISCOVER round-trip. Avoiding "earliest" prevents
+            # replaying stale messages from previous broker lifetimes (which would also
+            # cause cross-serializer decode errors when topics are shared).
             auto_offset_reset="latest",
             value_deserializer=lambda x: x,  # raw bytes
             **self.consumer_config,
@@ -210,7 +232,12 @@ class KafkaTransporter(Transporter):
         )
 
     async def _consume_loop(self) -> None:
-        """Background consume loop — routes messages to transit."""
+        """Background consume loop — routes messages to transit.
+
+        On unrecoverable error, logs and sets _consumer to None so that
+        the transporter is visibly disconnected. Matches Node.js pattern
+        where consumer 'error' event triggers $transporter.error broadcast.
+        """
         if not self._consumer:
             return
 
@@ -220,7 +247,7 @@ class KafkaTransporter(Transporter):
                     break
 
                 topic = message.topic
-                # Extract command: topic.split(".")[1] — matches Node.js line 212
+                # Extract command from topic — matches Node.js line 212
                 parts = topic.split(".")
                 if len(parts) < 2:  # noqa: PLR2004
                     logger.warning("Kafka: skipping message with short topic: %s", topic)
@@ -228,9 +255,10 @@ class KafkaTransporter(Transporter):
 
                 cmd = parts[1]
 
-                # Resolve packet type
+                # Resolve packet type from full topic string (avoids
+                # reconstructing prefix + cmd which only works by coincidence)
                 try:
-                    packet_type = Packet.from_topic(f"{self.prefix}.{cmd}")
+                    packet_type = Packet.from_topic(topic)
                 except (ValueError, AttributeError):
                     logger.warning("Kafka: unknown topic %s, skipping", topic)
                     continue
@@ -241,44 +269,11 @@ class KafkaTransporter(Transporter):
                 await self.receive_with_middleware(cmd, message.value, meta)
 
         except asyncio.CancelledError:
-            pass  # Normal shutdown
+            raise  # Propagate cancellation properly
         except Exception:
             if not self._shutting_down:
-                logger.exception("Kafka consumer error — connection may be broken")
+                logger.exception("Kafka consumer error — connection broken, consumer stopped")
                 self._consumer = None
-
-    async def receive(self, cmd: str, data: bytes, meta: dict[str, Any]) -> None:
-        """Deserialize and call handler."""
-        try:
-            payload = await self.transit.serializer.deserialize_async(data)
-        except Exception as e:
-            logger.warning("Failed to decode Kafka message, dropping: %r", e)
-            return
-
-        packet_type = meta.get("packet_type")
-        if packet_type is None:
-            raise ValueError("packet_type missing from meta")
-
-        sender = payload.get("sender")
-        packet = Packet(packet_type, sender, payload)
-        packet.sender = sender
-
-        if self.handler:
-            await self.handler(packet)
-        else:
-            raise ValueError("Message received but no handler is defined")
-
-    async def publish(self, packet: "Packet") -> None:
-        """Publish packet via Kafka producer."""
-        if not self._producer:
-            raise RuntimeError("Not connected to Kafka")
-
-        topic = self.get_topic_name(packet.type.value, packet.target)
-        payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        serialized = await self.transit.serializer.serialize_async(payload)
-
-        meta = {"packet": packet}
-        await self.send_with_middleware(topic, serialized, meta)
 
     async def send(self, topic: str, data: bytes, meta: dict[str, Any]) -> None:
         """Send raw bytes via Kafka producer.
@@ -286,7 +281,8 @@ class KafkaTransporter(Transporter):
         Matches Node.js: producer.send([{topic, messages, partition}]).
         """
         if not self._producer:
-            return  # Silent no-op
+            logger.warning("Kafka send called without producer — message dropped (topic=%s)", topic)
+            return
 
         await self._producer.send_and_wait(
             topic,
@@ -311,16 +307,23 @@ class KafkaTransporter(Transporter):
         raw = config.get("connection", config.get("host", "localhost:9092"))
         bootstrap_servers = raw.replace("kafka://", "")
 
-        consumer_cfg = config.get("consumer", {})
-        producer_cfg = config.get("producer", {})
-        publish_cfg = config.get("publish", {})
+        consumer_cfg_raw: dict[str, Any] = config.get("consumer") or {}
+        producer_cfg: dict[str, Any] = config.get("producer") or {}
+        publish_cfg: dict[str, Any] = config.get("publish") or {}
+
+        # Extract group_id before passing to AIOKafkaConsumer to prevent
+        # TypeError from duplicate kwarg (group_id passed explicitly + via **kwargs).
+        group_id = consumer_cfg_raw.get("group_id", consumer_cfg_raw.get("groupId"))
+        consumer_cfg = {
+            k: v for k, v in consumer_cfg_raw.items() if k not in ("group_id", "groupId")
+        }
 
         return cls(
             bootstrap_servers=bootstrap_servers,
             transit=transit,
             handler=handler,
             node_id=node_id,
-            group_id=consumer_cfg.get("group_id", consumer_cfg.get("groupId")),
+            group_id=group_id,
             partition=publish_cfg.get("partition", 0),
             producer_config=producer_cfg,
             consumer_config=consumer_cfg,

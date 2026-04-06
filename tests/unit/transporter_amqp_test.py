@@ -275,7 +275,7 @@ class TestAmqpSend:
         t = _make_transporter()
         t._channel = None
         packet = Packet(Topic.HEARTBEAT, "test-node", {})
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.publish(packet)
 
     @pytest.mark.asyncio
@@ -428,7 +428,7 @@ class TestAmqpBalancedGroups:
         t = _make_transporter()
         t._channel = None
         packet = Packet(Topic.REQUEST, "node", {"action": "math.add"})
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.publish_balanced_request(packet)
 
     @pytest.mark.asyncio
@@ -436,19 +436,19 @@ class TestAmqpBalancedGroups:
         t = _make_transporter()
         t._channel = None
         packet = Packet(Topic.EVENT, "node", {"event": "user.created"})
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.publish_balanced_event(packet, "mygroup")
 
     @pytest.mark.asyncio
     async def test_subscribe_balanced_request_raises_disconnected(self):
         t = _make_transporter()
         t._channel = None
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.subscribe_balanced_request("math.add")
 
     @pytest.mark.asyncio
     async def test_subscribe_balanced_event_raises_disconnected(self):
         t = _make_transporter()
         t._channel = None
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.subscribe_balanced_event("user.created", "group1")

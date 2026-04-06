@@ -200,9 +200,7 @@ async def demo_bulkhead(broker: Broker, service: DemoService) -> None:
 
     # Launch 10 concurrent requests
     tasks = [
-        asyncio.create_task(
-            broker.call("demo.concurrent_action", params={"id": i})
-        )
+        asyncio.create_task(broker.call("demo.concurrent_action", params={"id": i}))
         for i in range(10)
     ]
 
@@ -243,7 +241,6 @@ async def main() -> None:
     middlewares = [
         # Order matters! Outer middleware wraps inner ones.
         # Recommended order: Retry → CircuitBreaker → Timeout → Bulkhead → Fallback
-
         RetryMiddleware(
             max_retries=3,
             base_delay=0.1,  # Fast retries for demo

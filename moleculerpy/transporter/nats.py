@@ -18,10 +18,7 @@ if TYPE_CHECKING:
 
 from ..packet import Packet
 from ..serializers import to_packet_type
-from .base import Transporter
-
-# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
-PROTOCOL_VERSION: str = "4"
+from .base import PROTOCOL_VERSION, Transporter
 
 logger = logging.getLogger(__name__)
 
@@ -51,28 +48,14 @@ class NatsTransporter(Transporter):
             handler: Optional message handler function
             node_id: Unique identifier for this node
         """
-        super().__init__(self.name)
+        super().__init__(self.name, transit=transit, handler=handler, node_id=node_id)
         self.connection_string = connection_string
-        self.transit = transit
-        self.handler = handler
-        self.node_id = node_id
         self.nc: Any | None = None
         self._balanced_subscriptions: list[Any] = []
 
-    def get_topic_name(self, command: str, node_id: str | None = None) -> str:
-        """Generate a NATS topic name for a command.
-
-        Args:
-            command: Command type for the topic
-            node_id: Optional specific node ID to target
-
-        Returns:
-            Formatted NATS topic name
-        """
-        topic = f"MOL.{command}"
-        if node_id:
-            topic += f".{node_id}"
-        return topic
+    def _is_connected(self) -> bool:
+        """Check if NATS client is connected."""
+        return self.nc is not None and getattr(self.nc, "is_connected", False)
 
     async def message_handler(self, msg: Msg) -> None:
         """Handle incoming NATS messages.
@@ -98,61 +81,6 @@ class NatsTransporter(Transporter):
         # Pass raw bytes through middleware chain
         meta = {"subject": msg.subject, "packet_type": packet_type}
         await self.receive_with_middleware(packet_type.value, msg.data, meta)
-
-    async def receive(self, cmd: str, data: bytes, meta: dict[str, Any]) -> None:
-        """Process received raw bytes after middleware processing.
-
-        Deserializes the data and calls the handler with a Packet.
-
-        Args:
-            cmd: Command type (e.g., "REQ", "RES", "EVENT")
-            data: Raw message bytes (potentially decompressed/decrypted)
-            meta: Metadata containing packet_type, subject, etc.
-        """
-        packet_type = meta.get("packet_type")
-        if packet_type is None:
-            raise ValueError("packet_type missing from meta")
-
-        try:
-            payload = await self.transit.serializer.deserialize_async(
-                data, packet_type=to_packet_type(packet_type.value)
-            )
-        except Exception as e:
-            logger.warning("Failed to decode NATS message, dropping: %r", e)
-            return
-
-        sender = payload.get("sender")
-        packet = Packet(packet_type, sender, payload)
-        packet.sender = sender
-
-        if self.handler:
-            await self.handler(packet)
-        else:
-            raise ValueError("Message received but no handler is defined")
-
-    async def publish(self, packet: "Packet") -> None:
-        """Publish a packet to NATS.
-
-        Serializes the packet and sends through middleware chain.
-
-        Args:
-            packet: Packet to publish
-
-        Raises:
-            RuntimeError: If not connected to NATS
-        """
-        if not self.nc:
-            raise RuntimeError("Not connected to NATS server")
-
-        topic = self.get_topic_name(packet.type.value, packet.target)
-        payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        serialized_payload = await self.transit.serializer.serialize_async(
-            payload, packet_type=to_packet_type(packet.type.value)
-        )
-
-        # Send through middleware chain
-        meta = {"packet": packet}
-        await self.send_with_middleware(topic, serialized_payload, meta)
 
     async def send(self, topic: str, data: bytes, meta: dict[str, Any]) -> None:
         """Send raw bytes to NATS after middleware processing.
@@ -259,6 +187,7 @@ class NatsTransporter(Transporter):
         if not action:
             logger.warning("Cannot publish balanced request: missing action field")
             return
+        assert self.transit is not None  # guaranteed after connect
         topic = f"MOL.REQB.{action}"
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
         data = await self.transit.serializer.serialize_async(
@@ -279,6 +208,7 @@ class NatsTransporter(Transporter):
         if not event:
             logger.warning("Cannot publish balanced event: missing event field")
             return
+        assert self.transit is not None
         topic = f"MOL.EVENTB.{group}.{event}"
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
         data = await self.transit.serializer.serialize_async(

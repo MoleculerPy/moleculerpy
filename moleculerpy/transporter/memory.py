@@ -24,12 +24,10 @@ import weakref
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from ..serializers import to_packet_type
 from .base import Transporter
 
 logger = logging.getLogger(__name__)
-
-# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
-_PROTOCOL_VERSION: str = "4"
 
 if TYPE_CHECKING:
     from ..packet import Packet
@@ -244,10 +242,9 @@ class MemoryTransporter(Transporter):
             node_id: Unique identifier for this node
             bus: Optional custom bus instance (uses global bus if not provided)
         """
-        super().__init__(self.name)
-        self.transit = transit
-        self.handler = handler
-        self.node_id = node_id or "memory-node"
+        super().__init__(
+            self.name, transit=transit, handler=handler, node_id=node_id or "memory-node"
+        )
         self.bus = bus or _global_bus
         self._connected = False
         self._subscriptions: list[str] = []
@@ -255,20 +252,9 @@ class MemoryTransporter(Transporter):
         # Built-in balancer means no external balancer needed
         self.has_built_in_balancer = True
 
-    def get_topic_name(self, command: str, node_id: str | None = None) -> str:
-        """Generate a topic name for a command.
-
-        Args:
-            command: Command type for the topic
-            node_id: Optional specific node ID to target
-
-        Returns:
-            Formatted topic name (MOL.{command} or MOL.{command}.{node_id})
-        """
-        topic = f"MOL.{command}"
-        if node_id:
-            topic += f".{node_id}"
-        return topic
+    def _is_connected(self) -> bool:
+        """Check if memory transporter is connected."""
+        return self._connected
 
     async def _message_handler(self, topic: str, data: bytes, meta: dict[str, Any]) -> None:
         """Handle incoming messages from the bus.
@@ -316,21 +302,23 @@ class MemoryTransporter(Transporter):
             data: Raw message bytes (potentially decompressed/decrypted)
             meta: Metadata containing packet_type, topic, etc.
         """
-        if not self.handler:
+        if not self.handler or self.transit is None:
             return
 
         # Import here to avoid circular imports
         from ..packet import Packet  # noqa: PLC0415
 
-        try:
-            payload = await self.transit.serializer.deserialize_async(data)
-        except Exception as e:
-            logger.exception("Failed to deserialize message: %s", e)
-            return
-
         packet_type = meta.get("packet_type")
         if packet_type is None:
             logger.error("packet_type missing from meta")
+            return
+
+        try:
+            payload = await self.transit.serializer.deserialize_async(
+                data, packet_type=to_packet_type(packet_type.value)
+            )
+        except Exception as e:
+            logger.exception("Failed to deserialize message: %s", e)
             return
 
         sender = payload.get("sender")
@@ -353,7 +341,8 @@ class MemoryTransporter(Transporter):
         """
         self._connected = False
 
-        # Remove all subscriptions
+        # Remove all subscriptions (node_id always set for memory transport)
+        assert self.node_id is not None
         await self.bus.unsubscribe(self.node_id)
         await self.bus.wait_for_pending_tasks(timeout=5.0, subscriber_id=self.node_id)
         self._subscriptions.clear()
@@ -361,7 +350,7 @@ class MemoryTransporter(Transporter):
     async def publish(self, packet: "Packet") -> None:
         """Publish a packet to the memory bus.
 
-        Serializes the packet and sends through middleware chain.
+        Overrides base to include sender in meta for self-echo guard.
 
         Args:
             packet: Packet to publish
@@ -369,12 +358,19 @@ class MemoryTransporter(Transporter):
         Raises:
             RuntimeError: If not connected
         """
-        if not self._connected:
+        if not self._is_connected():
             raise RuntimeError("Memory transporter is not connected")
 
+        if self.transit is None:
+            raise RuntimeError("Transit not initialized")
+
+        from .base import PROTOCOL_VERSION  # noqa: PLC0415
+
         topic = self.get_topic_name(packet.type.value, packet.target)
-        payload = {**packet.payload, "ver": _PROTOCOL_VERSION, "sender": self.node_id}
-        serialized = await self.transit.serializer.serialize_async(payload)
+        payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
+        serialized = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
 
         # Send through middleware chain; include sender for self-echo guard
         meta = {"packet": packet, "sender": self.node_id}
@@ -413,6 +409,8 @@ class MemoryTransporter(Transporter):
         """
         if not self._connected:
             raise RuntimeError("Memory transporter is not connected")
+
+        assert self.node_id is not None  # always set for memory transport
 
         # Subscribe to broadcast topic (for messages with no target)
         broadcast_topic = self.get_topic_name(command)

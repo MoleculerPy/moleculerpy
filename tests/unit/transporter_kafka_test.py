@@ -34,7 +34,9 @@ class TestKafkaInit:
         assert t.name == "kafka"
         assert t.has_built_in_balancer is False
         assert t.partition == 0
-        assert t.group_id == "test-node"
+        # Default group_id now has timestamp suffix for unique-per-start semantics
+        # (prevents DISCOVER/INFO race between brokers sharing the same node_id).
+        assert t.group_id.startswith("moleculerpy-test-node-")
         assert t.prefix == "MOL"
 
     def test_custom_group_id(self):
@@ -115,7 +117,7 @@ class TestKafkaSend:
         t = _make_transporter()
         t._producer = None
         packet = Packet(Topic.HEARTBEAT, "test-node", {})
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.publish(packet)
 
     @pytest.mark.asyncio

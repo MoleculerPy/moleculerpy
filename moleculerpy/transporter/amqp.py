@@ -17,10 +17,8 @@ if TYPE_CHECKING:
     from ..transit import Transit
 
 from ..packet import Packet, Topic
-from .base import Transporter
-
-# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
-PROTOCOL_VERSION: str = "4"
+from ..serializers import to_packet_type
+from .base import PROTOCOL_VERSION, Transporter
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +93,8 @@ class AmqpTransporter(Transporter):
             message_options: Extra options for publish/sendToQueue calls
             consume_options: Extra options for channel.consume calls
         """
-        super().__init__(self.name)
+        super().__init__(self.name, transit=transit, handler=handler, node_id=node_id, prefix="MOL")
         self.urls = urls
-        self.transit = transit
-        self.handler = handler
-        self.node_id = node_id
 
         # AMQP options (matching Node.js constructor)
         self.prefetch = prefetch
@@ -119,15 +114,9 @@ class AmqpTransporter(Transporter):
         self._connect_attempt = 0
         self._disconnecting = False
 
-        # Topic prefix
-        self.prefix = "MOL"
-
-    def get_topic_name(self, command: str, node_id: str | None = None) -> str:
-        """Generate topic/queue name. Matches Node.js getTopicName()."""
-        topic = f"{self.prefix}.{command}"
-        if node_id:
-            topic += f".{node_id}"
-        return topic
+    def _is_connected(self) -> bool:
+        """Check if AMQP channel is connected."""
+        return self._channel is not None
 
     def _get_queue_options(
         self, packet_type: Topic, balanced_queue: bool = False
@@ -349,18 +338,6 @@ class AmqpTransporter(Transporter):
         )
         logger.debug("AMQP balanced event: %s", queue_name)
 
-    async def publish(self, packet: "Packet") -> None:
-        """Publish a packet. Serializes and routes through middleware."""
-        if not self._channel:
-            raise RuntimeError("Not connected to AMQP broker")
-
-        topic = self.get_topic_name(packet.type.value, packet.target)
-        payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        serialized = await self.transit.serializer.serialize_async(payload)
-
-        meta = {"packet": packet, "balanced": False}
-        await self.send_with_middleware(topic, serialized, meta)
-
     async def publish_balanced_request(self, packet: Packet) -> None:
         """Publish balanced request to shared work queue."""
         if not self._channel:
@@ -371,9 +348,12 @@ class AmqpTransporter(Transporter):
             logger.warning("Cannot publish balanced request: missing action")
             return
 
+        assert self.transit is not None
         topic = f"{self.prefix}.REQB.{action}"
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        data = await self.transit.serializer.serialize_async(payload)
+        data = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
         await self.send_with_middleware(topic, data, {"packet": packet, "balanced": True})
 
     async def publish_balanced_event(self, packet: Packet, group: str) -> None:
@@ -386,9 +366,12 @@ class AmqpTransporter(Transporter):
             logger.warning("Cannot publish balanced event: missing event")
             return
 
+        assert self.transit is not None
         topic = f"{self.prefix}.EVENTB.{group}.{event}"
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        data = await self.transit.serializer.serialize_async(payload)
+        data = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
         await self.send_with_middleware(topic, data, {"packet": packet, "balanced": True})
 
     async def unsubscribe_from_balanced_commands(self) -> None:
@@ -428,27 +411,6 @@ class AmqpTransporter(Transporter):
             )
             await exchange.publish(message, routing_key="")
 
-    async def receive(self, cmd: str, data: bytes, meta: dict[str, Any]) -> None:
-        """Process received bytes after middleware. Deserialize and call handler."""
-        try:
-            payload = await self.transit.serializer.deserialize_async(data)
-        except Exception as e:
-            logger.warning("Failed to decode AMQP message, dropping: %r", e)
-            return
-
-        packet_type = meta.get("packet_type")
-        if packet_type is None:
-            raise ValueError("packet_type missing from meta")
-
-        sender = payload.get("sender")
-        packet = Packet(packet_type, sender, payload)
-        packet.sender = sender
-
-        if self.handler:
-            await self.handler(packet)
-        else:
-            raise ValueError("Message received but no handler is defined")
-
     def _make_consumer(self, cmd: str, need_ack: bool = False) -> Callable[..., Any]:
         """Create a message consumer callback. Matches Node.js _consumeCB().
 
@@ -477,7 +439,10 @@ class AmqpTransporter(Transporter):
                     if self._channel:
                         await message.nack()
             else:
-                await self.receive_with_middleware(cmd, message.body, meta)
+                try:
+                    await self.receive_with_middleware(cmd, message.body, meta)
+                except Exception:
+                    logger.exception("AMQP broadcast message handling error, dropping")
 
         return consumer
 

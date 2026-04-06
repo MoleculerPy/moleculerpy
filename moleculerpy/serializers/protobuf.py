@@ -453,13 +453,24 @@ class ProtoBufSerializer(BaseSerializer):
         Matches Node.js base.js deserializeCustomFields() + convertDataFromTransport().
         Handles all 4 DataType values: UNDEFINED, NULL, JSON, BUFFER.
         """
-        # String fields: parse JSON strings back to dicts (with depth protection)
+        # String fields: parse JSON strings back to dicts (with depth protection).
+        # Empty string (default proto value for unset string field) means "not provided"
+        # and should be removed so downstream code sees missing-key not empty-string.
         fields = _STRINGIFY_FIELDS.get(class_name, [])
         for field in fields:
-            if field in obj and isinstance(obj[field], str) and obj[field]:
-                parsed = _safe_json_loads(obj[field], field)
-                if not isinstance(parsed, str):  # parse succeeded
-                    obj[field] = parsed
+            if field not in obj:
+                continue
+            val = obj[field]
+            if not isinstance(val, str):
+                continue
+            if not val:
+                # Empty string = unset field in proto3. Remove so downstream
+                # callers can use dict.get(field, default) safely.
+                obj.pop(field, None)
+                continue
+            parsed = _safe_json_loads(val, field)
+            if not isinstance(parsed, str):  # parse succeeded
+                obj[field] = parsed
 
         # Bytes fields: decode based on DataType
         for bytes_field in ("params", "data"):
