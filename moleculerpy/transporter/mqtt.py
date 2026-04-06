@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from ..transit import Transit
 
 from ..packet import Packet
+from ..serializers import to_packet_type
 from .base import Transporter
 
 # Moleculer protocol version (must match transit.PROTOCOL_VERSION)
@@ -239,15 +240,17 @@ class MqttTransporter(Transporter):
             data: Raw message bytes
             meta: Metadata containing packet_type, topic, etc.
         """
-        try:
-            payload = await self.transit.serializer.deserialize_async(data)
-        except Exception as e:
-            logger.warning("Failed to decode MQTT message, dropping: %r", e)
-            return
-
         packet_type = meta.get("packet_type")
         if packet_type is None:
             raise ValueError("packet_type missing from meta")
+
+        try:
+            payload = await self.transit.serializer.deserialize_async(
+                data, packet_type=to_packet_type(packet_type.value)
+            )
+        except Exception as e:
+            logger.warning("Failed to decode MQTT message, dropping: %r", e)
+            return
 
         sender = payload.get("sender")
         packet = Packet(packet_type, sender, payload)
@@ -274,7 +277,9 @@ class MqttTransporter(Transporter):
 
         topic = self.get_topic_name(packet.type.value, packet.target)
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        serialized_payload = await self.transit.serializer.serialize_async(payload)
+        serialized_payload = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
 
         meta = {"packet": packet}
         await self.send_with_middleware(topic, serialized_payload, meta)

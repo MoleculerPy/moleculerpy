@@ -22,6 +22,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ...packet import Packet, Topic
+from ...serializers import to_packet_type
 from ..base import Transporter
 from .constants import (
     DEFAULT_OPTIONS,
@@ -211,9 +212,11 @@ class TcpTransporter(Transporter):
         if packet.type not in supported:
             return
 
-        # Serialize payload
+        # Serialize payload — pass packet_type for schema-based serializers (ProtoBuf)
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        data = await self.transit.serializer.serialize_async(payload)
+        data = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
 
         # Send via middleware chain
         meta: dict[str, Any] = {"packet": packet}
@@ -252,7 +255,9 @@ class TcpTransporter(Transporter):
             meta: Metadata.
         """
         try:
-            payload = await self.transit.serializer.deserialize_async(data)
+            payload = await self.transit.serializer.deserialize_async(
+                data, packet_type=to_packet_type(cmd)
+            )
             packet = Packet(Topic(cmd), None, payload)
             packet.sender = payload.get("sender")
 
@@ -619,7 +624,9 @@ class TcpTransporter(Transporter):
             socket_info: Connection info (remote_address).
         """
         try:
-            payload = await self.transit.serializer.deserialize_async(data)
+            payload = await self.transit.serializer.deserialize_async(
+                data, packet_type=to_packet_type("GOSSIP_HELLO")
+            )
             sender = payload.get("sender", "")
 
             if self._gossip_debug:
@@ -733,7 +740,9 @@ class TcpTransporter(Transporter):
         response: dict[str, Any] = {"online": {}, "offline": {}}
 
         try:
-            payload = await self.transit.serializer.deserialize_async(data)
+            payload = await self.transit.serializer.deserialize_async(
+                data, packet_type=to_packet_type("GOSSIP_REQ")
+            )
             sender = payload.get("sender", "")
 
             if self._gossip_debug:
@@ -849,7 +858,9 @@ class TcpTransporter(Transporter):
             data: Serialized gossip response payload.
         """
         try:
-            payload = await self.transit.serializer.deserialize_async(data)
+            payload = await self.transit.serializer.deserialize_async(
+                data, packet_type=to_packet_type("GOSSIP_RES")
+            )
             sender = payload.get("sender", "")
 
             if self._gossip_debug:

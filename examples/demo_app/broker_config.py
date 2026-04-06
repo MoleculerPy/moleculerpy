@@ -25,9 +25,10 @@ from demo_app.bootstrap import configure_local_paths
 configure_local_paths()
 
 from demo_app.common import build_demo_settings, get_nats_url
-from moleculerpy import ServiceBroker
 from moleculerpy_channels import ChannelsMiddleware
 from moleculerpy_channels.adapters import NatsAdapter
+
+from moleculerpy import ServiceBroker
 
 
 def create_broker(config: Any, worker_id: int | None = None) -> ServiceBroker:
