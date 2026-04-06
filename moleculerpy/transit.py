@@ -139,12 +139,6 @@ class Transit:
         # Broker reference for middleware wrapping (set by broker after creation)
         self._broker: ServiceBroker | None = None
 
-        # Rate-limit discover_node: track pending DISCOVER requests with timestamps.
-        # Prevents flooding when repeated heartbeats arrive from unknown/offline
-        # nodes. Entries expire after 30s so retries are possible if INFO is lost.
-        # Cleared immediately in _handle_info on successful receipt.
-        self._discover_pending: dict[str, float] = {}
-
         # Wrapped methods (set by _wrap_methods, None until broker starts)
         self._wrapped_publish: Callable[[Packet], Awaitable[None]] | None = None
         self._wrapped_message_handler: Callable[[Packet], Awaitable[None]] | None = None
@@ -472,41 +466,29 @@ class Transit:
             await self.transporter.publish(packet)
 
     async def discover(self) -> None:
-        """Send a discovery request to find other nodes in the cluster."""
-        await self.publish(Packet(Topic.DISCOVER, None, {}))
+        """Send a discovery request to find other nodes in the cluster.
+
+        Delegates to Discoverer if available, else publishes directly.
+        """
+        if self._broker and hasattr(self._broker, "discoverer"):
+            await self._broker.discoverer.discover_all()
+        else:
+            await self.publish(Packet(Topic.DISCOVER, None, {}))
 
     async def discover_node(self, node_id: str) -> None:
-        """Send a targeted discovery request to a specific node.
-
-        Matches Node.js Moleculer base discoverer's `discoverNode(nodeID)`.
-        Triggered when a heartbeat arrives from an unknown/restarted/changed node
-        so the remote will reply with a fresh INFO packet.
-
-        Args:
-            node_id: Target node ID
-        """
-        await self.publish(Packet(Topic.DISCOVER, node_id, {}))
-
-    _DISCOVER_COOLDOWN: float = 30.0  # Seconds before retrying DISCOVER for same node
+        """Send targeted DISCOVER. Delegates to Discoverer."""
+        if self._broker and hasattr(self._broker, "discoverer"):
+            await self._broker.discoverer.discover_node(node_id)
+        else:
+            await self.publish(Packet(Topic.DISCOVER, node_id, {}))
 
     async def _request_discovery(self, sender: str, reason: str) -> None:
-        """Rate-limited discovery request. Prevents DISCOVER flooding.
-
-        Entries in _discover_pending expire after _DISCOVER_COOLDOWN seconds
-        so retries are possible if the INFO response is lost.
-        """
-        now = time.time()
-        last = self._discover_pending.get(sender)
-        if last is not None and (now - last) < self._DISCOVER_COOLDOWN:
-            return  # Cooldown active — skip
-
-        self._discover_pending[sender] = now
-        self.logger.debug(f"Heartbeat from {reason} node '{sender}', requesting INFO")
-        try:
+        """Rate-limited discovery request. Delegates to Discoverer."""
+        if self._broker and hasattr(self._broker, "discoverer"):
+            await self._broker.discoverer.request_discovery(sender, reason)
+        else:
+            # Fallback: direct publish without rate-limiting
             await self.discover_node(sender)
-        except Exception as e:
-            self.logger.warning(f"Failed to send targeted DISCOVER to '{sender}': {e}")
-            self._discover_pending.pop(sender, None)
 
     async def beat(self) -> None:
         """Send a heartbeat with current node metrics.
@@ -625,7 +607,8 @@ class Transit:
             return
 
         # Clear discover-pending flag — INFO response received successfully.
-        self._discover_pending.pop(packet.sender, None)
+        if self._broker and hasattr(self._broker, "discoverer"):
+            self._broker.discoverer.clear_discover_pending(packet.sender)
 
         # Route INFO updates through NodeCatalog to avoid duplicate registrations.
         allowed_fields = {

@@ -1683,32 +1683,20 @@ class TestRequestDiscovery:
     """Tests for _request_discovery rate-limiting and _handle_discover targeted reply."""
 
     @pytest.mark.asyncio
-    async def test_request_discovery_cooldown(self, mock_dependencies, mock_transporter):
-        """Second DISCOVER within cooldown is skipped."""
-        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
-            transit = Transit(**mock_dependencies)
-            transit.discover_node = AsyncMock()
-
-            await transit._request_discovery("node-X", "unknown")
-            assert transit.discover_node.await_count == 1
-
-            # Second call within cooldown — should be skipped
-            await transit._request_discovery("node-X", "unknown")
-            assert transit.discover_node.await_count == 1  # Still 1
-
-    @pytest.mark.asyncio
-    async def test_request_discovery_error_clears_pending(
+    async def test_request_discovery_delegates_to_discoverer(
         self, mock_dependencies, mock_transporter
     ):
-        """If discover_node raises, pending entry is cleared for retry."""
+        """_request_discovery delegates to broker.discoverer."""
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
             transit = Transit(**mock_dependencies)
-            transit.discover_node = AsyncMock(side_effect=RuntimeError("disconnected"))
+            mock_discoverer = MagicMock()
+            mock_discoverer.request_discovery = AsyncMock()
+            transit._broker = MagicMock()
+            transit._broker.discoverer = mock_discoverer
 
-            await transit._request_discovery("node-Y", "offline")
+            await transit._request_discovery("node-X", "unknown")
 
-            # Should have cleared pending so retry is possible
-            assert "node-Y" not in transit._discover_pending
+            mock_discoverer.request_discovery.assert_awaited_once_with("node-X", "unknown")
 
     @pytest.mark.asyncio
     async def test_handle_discover_targeted_reply(self, mock_dependencies, mock_transporter):
@@ -1745,12 +1733,13 @@ class TestRequestDiscovery:
 
     @pytest.mark.asyncio
     async def test_handle_info_clears_discover_pending(self, mock_dependencies, mock_transporter):
-        """Receiving INFO clears _discover_pending for that node."""
+        """Receiving INFO clears discover pending via broker.discoverer."""
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
             transit = Transit(**mock_dependencies)
-            transit._discover_pending["remote-node"] = 1000.0
+            mock_discoverer = MagicMock()
+            transit._broker = MagicMock()
+            transit._broker.discoverer = mock_discoverer
 
-            # Mock node_catalog to accept the INFO
             transit.node_catalog = MagicMock()
             transit.node_catalog.local_node = MagicMock()
             transit.node_catalog.process_node_info = MagicMock()
@@ -1759,4 +1748,4 @@ class TestRequestDiscovery:
             packet.sender = "remote-node"
             await transit._handle_info(packet)
 
-            assert "remote-node" not in transit._discover_pending
+            mock_discoverer.clear_discover_pending.assert_called_once_with("remote-node")

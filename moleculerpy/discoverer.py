@@ -38,6 +38,8 @@ class Discoverer:
     "no running event loop" errors when instantiated outside async context.
     """
 
+    _DISCOVER_COOLDOWN: float = 30.0  # Seconds before retrying DISCOVER for same node
+
     def __init__(self, broker: "ServiceBroker") -> None:
         self.broker = broker
         self.transit: Transit = broker.transit
@@ -46,6 +48,11 @@ class Discoverer:
 
         self.heartbeat_interval = broker.settings.heartbeat_interval
         self.heartbeat_timeout = broker.settings.heartbeat_timeout
+
+        # Rate-limit discover_node: track pending DISCOVER requests with timestamps.
+        # Entries expire after _DISCOVER_COOLDOWN seconds so retries are possible
+        # if the INFO response is lost. Cleared in clear_discover_pending().
+        self._discover_pending: dict[str, float] = {}
 
     async def start(self) -> None:
         """Start the discoverer and begin periodic tasks.
@@ -121,6 +128,52 @@ class Discoverer:
                 periodic_clean_offline(), name="moleculerpy:discoverer-clean-offline"
             )
         )
+
+    # ------------------------------------------------------------------
+    # Discovery methods (moved from Transit for SRP)
+    # ------------------------------------------------------------------
+
+    async def discover_all(self) -> None:
+        """Broadcast DISCOVER to find all nodes in the cluster."""
+        from .packet import Packet, Topic  # noqa: PLC0415
+
+        await self.transit.publish(Packet(Topic.DISCOVER, None, {}))
+
+    async def discover_node(self, node_id: str) -> None:
+        """Send targeted DISCOVER to a specific node.
+
+        Matches Node.js base discoverer discoverNode(nodeID).
+        """
+        from .packet import Packet, Topic  # noqa: PLC0415
+
+        await self.transit.publish(Packet(Topic.DISCOVER, node_id, {}))
+
+    async def request_discovery(self, sender: str, reason: str) -> None:
+        """Rate-limited discovery request. Prevents DISCOVER flooding.
+
+        Entries in _discover_pending expire after _DISCOVER_COOLDOWN seconds
+        so retries are possible if the INFO response is lost.
+        """
+        now = time.time()
+        last = self._discover_pending.get(sender)
+        if last is not None and (now - last) < self._DISCOVER_COOLDOWN:
+            return  # Cooldown active — skip
+
+        self._discover_pending[sender] = now
+        self.broker.logger.debug(f"Heartbeat from {reason} node '{sender}', requesting INFO")
+        try:
+            await self.discover_node(sender)
+        except Exception as e:
+            self.broker.logger.warning(f"Failed to send targeted DISCOVER to '{sender}': {e}")
+            self._discover_pending.pop(sender, None)
+
+    def clear_discover_pending(self, node_id: str) -> None:
+        """Clear pending discover entry — called when INFO received."""
+        self._discover_pending.pop(node_id, None)
+
+    # ------------------------------------------------------------------
+    # Health check timers
+    # ------------------------------------------------------------------
 
     def check_remote_nodes(self) -> None:
         """Check all registered remote nodes are available.
