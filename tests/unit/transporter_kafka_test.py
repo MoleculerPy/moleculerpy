@@ -117,7 +117,7 @@ class TestKafkaSend:
         t = _make_transporter()
         t._producer = None
         packet = Packet(Topic.HEARTBEAT, "test-node", {})
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.publish(packet)
 
     @pytest.mark.asyncio

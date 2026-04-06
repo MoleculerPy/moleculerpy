@@ -18,10 +18,7 @@ if TYPE_CHECKING:
     from ..transit import Transit
 
 from ..packet import Packet
-from ..serializers import to_packet_type
 from .base import SubscriptionTopic, Transporter
-
-PROTOCOL_VERSION: str = "4"
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +67,8 @@ class KafkaTransporter(Transporter):
             producer_config: Extra AIOKafkaProducer kwargs
             consumer_config: Extra AIOKafkaConsumer kwargs
         """
-        super().__init__(self.name)
+        super().__init__(self.name, transit=transit, handler=handler, node_id=node_id, prefix="MOL")
         self.bootstrap_servers = bootstrap_servers
-        self.transit = transit
-        self.handler = handler
-        self.node_id = node_id
         # Per-instance unique group_id (matches Node.js moleculer kafka.js line 186:
         # `groupId: this.broker.instanceID`). Each broker start gets its own
         # consumer group — ensures every broker sees all historical DISCOVER/INFO
@@ -90,14 +84,9 @@ class KafkaTransporter(Transporter):
         self._consume_task: asyncio.Task[None] | None = None
         self._shutting_down = False
 
-        self.prefix = "MOL"
-
-    def get_topic_name(self, command: str, node_id: str | None = None) -> str:
-        """Generate Kafka topic name. Matches Node.js getTopicName()."""
-        topic = f"{self.prefix}.{command}"
-        if node_id:
-            topic += f".{node_id}"
-        return topic
+    def _is_connected(self) -> bool:
+        """Check if Kafka producer is connected."""
+        return self._producer is not None
 
     async def connect(self) -> None:
         """Connect to Kafka — create producer.
@@ -285,43 +274,6 @@ class KafkaTransporter(Transporter):
             if not self._shutting_down:
                 logger.exception("Kafka consumer error — connection broken, consumer stopped")
                 self._consumer = None
-
-    async def receive(self, cmd: str, data: bytes, meta: dict[str, Any]) -> None:
-        """Deserialize and call handler."""
-        packet_type = meta.get("packet_type")
-        if packet_type is None:
-            raise ValueError("packet_type missing from meta")
-
-        try:
-            payload = await self.transit.serializer.deserialize_async(
-                data, packet_type=to_packet_type(packet_type.value)
-            )
-        except Exception as e:
-            logger.warning("Failed to decode Kafka message, dropping: %r", e)
-            return
-
-        sender = payload.get("sender")
-        packet = Packet(packet_type, sender, payload)
-        packet.sender = sender
-
-        if self.handler:
-            await self.handler(packet)
-        else:
-            raise ValueError("Message received but no handler is defined")
-
-    async def publish(self, packet: "Packet") -> None:
-        """Publish packet via Kafka producer."""
-        if not self._producer:
-            raise RuntimeError("Not connected to Kafka")
-
-        topic = self.get_topic_name(packet.type.value, packet.target)
-        payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        serialized = await self.transit.serializer.serialize_async(
-            payload, packet_type=to_packet_type(packet.type.value)
-        )
-
-        meta = {"packet": packet}
-        await self.send_with_middleware(topic, serialized, meta)
 
     async def send(self, topic: str, data: bytes, meta: dict[str, Any]) -> None:
         """Send raw bytes via Kafka producer.

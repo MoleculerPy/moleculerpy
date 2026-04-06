@@ -344,7 +344,7 @@ class TestMqttSend:
         t = _make_transporter()
         t._client = None
         packet = Packet(Topic.HEARTBEAT, "local-node", {})
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.publish(packet)
 
 
@@ -382,7 +382,7 @@ class TestMqttSubscribe:
     async def test_subscribe_raises_when_disconnected(self):
         t = _make_transporter()
         t._client = None
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.subscribe("DISCOVER")
 
 

@@ -18,11 +18,7 @@ if TYPE_CHECKING:
     from ..transit import Transit
 
 from ..packet import Packet
-from ..serializers import to_packet_type
 from .base import Transporter
-
-# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
-PROTOCOL_VERSION: str = "4"
 
 logger = logging.getLogger(__name__)
 DISCONNECT_TIMEOUT_SECONDS = 5.0
@@ -70,11 +66,8 @@ class MqttTransporter(Transporter):
             qos: MQTT Quality of Service level (0, 1, or 2). Default: 0
             topic_separator: Topic name separator. Default: "." (Node.js compatible)
         """
-        super().__init__(self.name)
+        super().__init__(self.name, transit=transit, handler=handler, node_id=node_id, prefix="MOL")
         self.connection_string = connection_string
-        self.transit = transit
-        self.handler = handler
-        self.node_id = node_id
         self.qos = qos
         self.topic_separator = topic_separator
 
@@ -87,8 +80,9 @@ class MqttTransporter(Transporter):
         # Shutdown flag
         self._shutting_down = False
 
-        # Topic prefix (MOL or MOL-{namespace})
-        self.prefix = "MOL"
+    def _is_connected(self) -> bool:
+        """Check if MQTT client is connected."""
+        return self._client is not None
 
     def get_topic_name(self, command: str, node_id: str | None = None) -> str:
         """Generate an MQTT topic name for a command.
@@ -229,60 +223,6 @@ class MqttTransporter(Transporter):
 
         meta = {"topic": raw_topic, "packet_type": packet_type}
         await self.receive_with_middleware(packet_type.value, data, meta)
-
-    async def receive(self, cmd: str, data: bytes, meta: dict[str, Any]) -> None:
-        """Process received raw bytes after middleware processing.
-
-        Deserializes the data and calls the handler with a Packet.
-
-        Args:
-            cmd: Command type (e.g., "REQ", "RES", "EVENT")
-            data: Raw message bytes
-            meta: Metadata containing packet_type, topic, etc.
-        """
-        packet_type = meta.get("packet_type")
-        if packet_type is None:
-            raise ValueError("packet_type missing from meta")
-
-        try:
-            payload = await self.transit.serializer.deserialize_async(
-                data, packet_type=to_packet_type(packet_type.value)
-            )
-        except Exception as e:
-            logger.warning("Failed to decode MQTT message, dropping: %r", e)
-            return
-
-        sender = payload.get("sender")
-        packet = Packet(packet_type, sender, payload)
-        packet.sender = sender
-
-        if self.handler:
-            await self.handler(packet)
-        else:
-            raise ValueError("Message received but no handler is defined")
-
-    async def publish(self, packet: "Packet") -> None:
-        """Publish a packet to MQTT.
-
-        Serializes the packet and sends through middleware chain.
-
-        Args:
-            packet: Packet to publish
-
-        Raises:
-            RuntimeError: If not connected to MQTT broker
-        """
-        if not self._client:
-            raise RuntimeError("Not connected to MQTT broker")
-
-        topic = self.get_topic_name(packet.type.value, packet.target)
-        payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        serialized_payload = await self.transit.serializer.serialize_async(
-            payload, packet_type=to_packet_type(packet.type.value)
-        )
-
-        meta = {"packet": packet}
-        await self.send_with_middleware(topic, serialized_payload, meta)
 
     async def send(self, topic: str, data: bytes, meta: dict[str, Any]) -> None:
         """Send raw bytes to MQTT after middleware processing.

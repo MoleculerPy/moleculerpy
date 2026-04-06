@@ -75,10 +75,7 @@ class TcpTransporter(Transporter):
             node_id: This node's unique identifier.
             opts: Configuration options (merged with DEFAULT_OPTIONS).
         """
-        super().__init__(self.name)
-        self.transit = transit
-        self.handler = handler
-        self.node_id = node_id or ""
+        super().__init__(self.name, transit=transit, handler=handler, node_id=node_id or "")
         self.logger = logger
 
         # Merge user options with defaults
@@ -127,6 +124,10 @@ class TcpTransporter(Transporter):
     # ------------------------------------------------------------------
     # Transporter ABC implementation
     # ------------------------------------------------------------------
+
+    def _is_connected(self) -> bool:
+        """TCP is connected when writer is available."""
+        return self.writer is not None
 
     async def connect(self) -> None:
         """Start TCP server, UDP discovery, and gossip timers."""
@@ -196,6 +197,7 @@ class TcpTransporter(Transporter):
             packet: Packet to publish.
         """
         # Only send targeted packets that TCP supports
+        assert self.transit is not None  # guaranteed after connect
         if not packet.target:
             return
 
@@ -254,6 +256,7 @@ class TcpTransporter(Transporter):
             data: Raw serialized bytes.
             meta: Metadata.
         """
+        assert self.transit is not None
         try:
             payload = await self.transit.serializer.deserialize_async(
                 data, packet_type=to_packet_type(cmd)
@@ -393,7 +396,7 @@ class TcpTransporter(Transporter):
 
         self.udp_server = UdpBroadcaster(
             namespace=ns,
-            node_id=self.node_id,
+            node_id=self.node_id or "",
             tcp_port=tcp_port,
             opts=self.opts,
             on_message=self._on_udp_message,
@@ -623,6 +626,7 @@ class TcpTransporter(Transporter):
             data: Serialized payload.
             socket_info: Connection info (remote_address).
         """
+        assert self.transit is not None
         try:
             payload = await self.transit.serializer.deserialize_async(
                 data, packet_type=to_packet_type("GOSSIP_HELLO")
@@ -737,6 +741,7 @@ class TcpTransporter(Transporter):
         Args:
             data: Serialized gossip request payload.
         """
+        assert self.transit is not None
         response: dict[str, Any] = {"online": {}, "offline": {}}
 
         try:
@@ -857,6 +862,7 @@ class TcpTransporter(Transporter):
         Args:
             data: Serialized gossip response payload.
         """
+        assert self.transit is not None
         try:
             payload = await self.transit.serializer.deserialize_async(
                 data, packet_type=to_packet_type("GOSSIP_RES")

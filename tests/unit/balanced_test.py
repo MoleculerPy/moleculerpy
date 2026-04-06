@@ -50,17 +50,14 @@ class TestBalancedTransporterBase:
             async def disconnect(self) -> None:
                 pass
 
-            async def publish(self, packet: Packet) -> None:
-                pass
-
             async def subscribe(self, command: str, topic: str | None = None) -> None:
                 pass
 
             async def send(self, topic: str, data: bytes, meta: dict[str, Any]) -> None:
                 pass
 
-            async def receive(self, cmd: str, data: bytes, meta: dict[str, Any]) -> None:
-                pass
+            def _is_connected(self) -> bool:
+                return False
 
             @classmethod
             def from_config(cls, config, transit, handler=None, node_id=None):  # type: ignore[override]
@@ -700,7 +697,7 @@ class TestNatsBalancedEdgeCases:
         t = NatsTransporter("nats://localhost:4222", transit, handler=AsyncMock(), node_id="node-1")
         t.nc = None
 
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.subscribe_balanced_request("math.add")
 
     @pytest.mark.asyncio
@@ -712,7 +709,7 @@ class TestNatsBalancedEdgeCases:
         t = NatsTransporter("nats://localhost:4222", transit, handler=AsyncMock(), node_id="node-1")
         t.nc = None
 
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.subscribe_balanced_event("user.created", "users")
 
     @pytest.mark.asyncio
@@ -725,7 +722,7 @@ class TestNatsBalancedEdgeCases:
         t.nc = None
 
         packet = Packet(Topic.REQUEST, None, {"action": "math.add"})
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.publish_balanced_request(packet)
 
     @pytest.mark.asyncio
@@ -738,7 +735,7 @@ class TestNatsBalancedEdgeCases:
         t.nc = None
 
         packet = Packet(Topic.EVENT, None, {"event": "user.created"})
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await t.publish_balanced_event(packet, "users")
 
     @pytest.mark.asyncio
