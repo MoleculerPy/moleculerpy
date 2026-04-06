@@ -23,6 +23,8 @@ try:
 
     PROTOBUF_AVAILABLE = True
 except ImportError:
+    MessageToDict = None  # type: ignore[assignment,misc,unused-ignore]
+    ParseDict = None  # type: ignore[assignment,misc,unused-ignore]
     PROTOBUF_AVAILABLE = False
 
 # Packet type string → proto message class name mapping

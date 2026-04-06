@@ -11,17 +11,20 @@ Node.js uses cbor-x with options: useRecords=false, useTag259ForMaps=false
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..errors import SerializationError
 from .base import BaseSerializer
 
+if TYPE_CHECKING:
+    import cbor2 as _cbor2_type  # noqa: F401 — for type hints only
+
 try:
-    import cbor2
+    import cbor2 as _cbor2
 
     CBOR_AVAILABLE = True
 except ImportError:
-    cbor2 = None
+    _cbor2 = None  # type: ignore[assignment,unused-ignore]
     CBOR_AVAILABLE = False
 
 
@@ -56,9 +59,9 @@ class CborSerializer(BaseSerializer):
         Raises:
             SerializationError: If payload contains non-serializable types.
         """
-        assert cbor2 is not None
+        assert _cbor2 is not None
         try:
-            result: bytes = cbor2.dumps(payload)
+            result: bytes = _cbor2.dumps(payload)
             return result
         except Exception as e:
             if isinstance(e, SerializationError):
@@ -77,9 +80,9 @@ class CborSerializer(BaseSerializer):
         Raises:
             SerializationError: If data is not valid CBOR or not a dict.
         """
-        assert cbor2 is not None
+        assert _cbor2 is not None
         try:
-            result = cbor2.loads(data)
+            result = _cbor2.loads(data)
             if not isinstance(result, dict):
                 raise SerializationError(
                     f"Expected dict from CBOR deserialization, got {type(result).__name__}"
