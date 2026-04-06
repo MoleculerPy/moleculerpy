@@ -199,7 +199,7 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["cryptography.*", "watchdog.*", "nats.*", "redis.*", "prometheus_client.*", "opentelemetry.*", "psutil.*", "msgpack.*"]
+module = ["cryptography.*", "watchdog.*", "nats.*", "redis.*", "prometheus_client.*", "opentelemetry.*", "psutil.*", "msgpack.*", "cbor2.*", "google.protobuf.*", "moleculerpy.serializers.proto.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
