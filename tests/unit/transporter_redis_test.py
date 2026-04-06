@@ -248,7 +248,7 @@ class TestRedisTransporter:
         """Test that publish raises RuntimeError if not connected."""
         packet = Packet(TopicREQ, "target", {"action": "test"})
 
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await transporter.publish(packet)
 
     @pytest.mark.asyncio
@@ -284,7 +284,7 @@ class TestRedisTransporter:
     @pytest.mark.asyncio
     async def test_send_raises_if_not_connected(self, transporter):
         """Test that send raises RuntimeError if not connected."""
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await transporter.send("MOL.REQ", b"data", {})
 
     # ============ Subscribe Tests ============
@@ -292,7 +292,7 @@ class TestRedisTransporter:
     @pytest.mark.asyncio
     async def test_subscribe_raises_if_not_connected(self, transporter):
         """Test that subscribe raises RuntimeError if not connected."""
-        with pytest.raises(RuntimeError, match="Not connected"):
+        with pytest.raises(RuntimeError, match=r"(?i)not connected"):
             await transporter.subscribe("REQ")
 
     @pytest.mark.asyncio

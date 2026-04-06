@@ -15,11 +15,7 @@ if TYPE_CHECKING:
     from ..transit import Transit
 
 from ..packet import Packet
-from ..serializers import to_packet_type
 from .base import Transporter
-
-# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
-PROTOCOL_VERSION: str = "4"
 
 logger = logging.getLogger(__name__)
 DISCONNECT_TIMEOUT_SECONDS = 5.0
@@ -69,11 +65,8 @@ class RedisTransporter(Transporter):
             handler: Optional message handler function
             node_id: Unique identifier for this node
         """
-        super().__init__(self.name)
+        super().__init__(self.name, transit=transit, handler=handler, node_id=node_id)
         self.connection_string = connection_string
-        self.transit = transit
-        self.handler = handler
-        self.node_id = node_id
 
         # Redis client instances
         self._redis: Any | None = None
@@ -88,22 +81,13 @@ class RedisTransporter(Transporter):
         # Shutdown flag
         self._shutting_down = False
 
-    def get_topic_name(self, command: str, node_id: str | None = None) -> str:
-        """Generate a Redis channel name for a command.
+    def _is_connected(self) -> bool:
+        """Check if Redis client is connected."""
+        return self._redis is not None
 
-        Uses Moleculer-compatible topic naming: MOL.{command}[.{node_id}]
-
-        Args:
-            command: Command type for the channel (e.g., REQ, RES, EVENT)
-            node_id: Optional specific node ID to target
-
-        Returns:
-            Formatted Redis channel name
-        """
-        topic = f"MOL.{command}"
-        if node_id:
-            topic += f".{node_id}"
-        return topic
+    def _on_deserialize_error(self, cmd: str, error: Exception) -> None:
+        """Override: Redis raises on decode error instead of dropping."""
+        raise ValueError(f"Failed to decode message data: {error}") from error
 
     async def _listen_loop(self) -> None:
         """Listen for incoming Redis Pub/Sub messages.
@@ -168,60 +152,6 @@ class RedisTransporter(Transporter):
                 operation,
                 DISCONNECT_TIMEOUT_SECONDS,
             )
-
-    async def receive(self, cmd: str, data: bytes, meta: dict[str, Any]) -> None:
-        """Process received raw bytes after middleware processing.
-
-        Deserializes the data and calls the handler with a Packet.
-
-        Args:
-            cmd: Command type (e.g., "REQ", "RES", "EVENT")
-            data: Raw message bytes (potentially decompressed/decrypted)
-            meta: Metadata containing packet_type, channel, etc.
-        """
-        packet_type = meta.get("packet_type")
-        if packet_type is None:
-            raise ValueError("packet_type missing from meta")
-
-        try:
-            payload = await self.transit.serializer.deserialize_async(
-                data, packet_type=to_packet_type(packet_type.value)
-            )
-        except Exception as e:
-            raise ValueError(f"Failed to decode message data: {e}") from e
-
-        sender = payload.get("sender")
-        packet = Packet(packet_type, sender, payload)
-        packet.sender = sender
-
-        if self.handler:
-            await self.handler(packet)
-        else:
-            raise ValueError("Message received but no handler is defined")
-
-    async def publish(self, packet: "Packet") -> None:
-        """Publish a packet to Redis.
-
-        Serializes the packet and sends through middleware chain.
-
-        Args:
-            packet: Packet to publish
-
-        Raises:
-            RuntimeError: If not connected to Redis
-        """
-        if not self._redis:
-            raise RuntimeError("Not connected to Redis server")
-
-        topic = self.get_topic_name(packet.type.value, packet.target)
-        payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        serialized_payload = await self.transit.serializer.serialize_async(
-            payload, packet_type=to_packet_type(packet.type.value)
-        )
-
-        # Send through middleware chain
-        meta = {"packet": packet}
-        await self.send_with_middleware(topic, serialized_payload, meta)
 
     async def send(self, topic: str, data: bytes, meta: dict[str, Any]) -> None:
         """Send raw bytes to Redis after middleware processing.
