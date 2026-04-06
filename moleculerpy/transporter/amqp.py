@@ -18,10 +18,7 @@ if TYPE_CHECKING:
 
 from ..packet import Packet, Topic
 from ..serializers import to_packet_type
-from .base import Transporter
-
-# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
-PROTOCOL_VERSION: str = "4"
+from .base import PROTOCOL_VERSION, Transporter
 
 logger = logging.getLogger(__name__)
 
@@ -442,7 +439,10 @@ class AmqpTransporter(Transporter):
                     if self._channel:
                         await message.nack()
             else:
-                await self.receive_with_middleware(cmd, message.body, meta)
+                try:
+                    await self.receive_with_middleware(cmd, message.body, meta)
+                except Exception:
+                    logger.exception("AMQP broadcast message handling error, dropping")
 
         return consumer
 

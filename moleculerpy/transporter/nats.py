@@ -18,10 +18,7 @@ if TYPE_CHECKING:
 
 from ..packet import Packet
 from ..serializers import to_packet_type
-from .base import Transporter
-
-# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
-PROTOCOL_VERSION: str = "4"
+from .base import PROTOCOL_VERSION, Transporter
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +55,7 @@ class NatsTransporter(Transporter):
 
     def _is_connected(self) -> bool:
         """Check if NATS client is connected."""
-        return self.nc is not None
+        return self.nc is not None and getattr(self.nc, "is_connected", False)
 
     async def message_handler(self, msg: Msg) -> None:
         """Handle incoming NATS messages.

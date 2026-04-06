@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...packet import Packet, Topic
 from ...serializers import to_packet_type
-from ..base import Transporter
+from ..base import PROTOCOL_VERSION, Transporter
 from .constants import (
     DEFAULT_OPTIONS,
     resolve_packet_id,
@@ -35,8 +35,6 @@ from .udp_broadcaster import UdpBroadcaster
 if TYPE_CHECKING:
     from ...transit import Transit
 
-# Moleculer protocol version (must match transit.PROTOCOL_VERSION)
-PROTOCOL_VERSION: str = "4"
 
 logger = logging.getLogger(__name__)
 

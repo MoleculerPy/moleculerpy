@@ -232,8 +232,9 @@ class Discoverer:
 
     async def stop(self) -> None:
         """Stop the discoverer and cancel all running tasks."""
-        if not self._tasks:
+        if not self._started:
             return
+        self._started = False
 
         for task in self._tasks:
             if not task.done() and not task.cancelled():
@@ -250,4 +251,3 @@ class Discoverer:
                 pass
             finally:
                 self._tasks.clear()
-                self._started = False  # Allow restart after stop-start cycle
