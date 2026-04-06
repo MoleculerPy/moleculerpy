@@ -24,6 +24,7 @@ class TestDiscoverer:
         """Create mock settings with default heartbeat interval."""
         settings = Mock(spec=Settings)
         settings.heartbeat_interval = 5.0
+        settings.heartbeat_timeout = 15.0
         return settings
 
     @pytest.fixture
@@ -60,7 +61,7 @@ class TestDiscoverer:
         await discoverer.start()
 
         # After start, tasks should be created
-        assert len(discoverer._tasks) == 1
+        assert len(discoverer._tasks) == 3
         assert discoverer._started
         assert discoverer._tasks[0].get_name() == "moleculerpy:discoverer-beat"
 
@@ -78,7 +79,7 @@ class TestDiscoverer:
         # Second start should be a no-op
         await discoverer.start()
 
-        assert len(discoverer._tasks) == 1
+        assert len(discoverer._tasks) == 3
         assert discoverer._tasks[0] is first_task
 
         await discoverer.stop()
@@ -119,7 +120,7 @@ class TestDiscoverer:
         await discoverer.start()
 
         # Verify task is running
-        assert len(discoverer._tasks) == 1
+        assert len(discoverer._tasks) == 3
         assert not discoverer._tasks[0].done()
 
         # Stop discoverer
@@ -180,7 +181,7 @@ class TestDiscoverer:
         # Check that error was logged
         mock_broker.logger.error.assert_called()
         error_message = str(mock_broker.logger.error.call_args[0][0])
-        assert "Error in periodic beat" in error_message
+        assert "Heartbeat failed" in error_message
         assert "Network error" in error_message
 
     @pytest.mark.asyncio
@@ -219,8 +220,8 @@ class TestDiscoverer:
         await discoverer2.start()
 
         # Each should have their own tasks
-        assert len(discoverer1._tasks) == 1
-        assert len(discoverer2._tasks) == 1
+        assert len(discoverer1._tasks) == 3
+        assert len(discoverer2._tasks) == 3
         assert discoverer1._tasks[0] != discoverer2._tasks[0]
 
         # Stop both
@@ -275,7 +276,7 @@ class TestDiscoverer:
         discoverer = Discoverer(mock_broker)
         await discoverer.start()
 
-        assert len(discoverer._tasks) == 1
+        assert len(discoverer._tasks) == 3
         assert discoverer._tasks[0].get_name() == "moleculerpy:discoverer-beat"
 
         await discoverer.stop()
@@ -304,3 +305,177 @@ class TestDiscoverer:
 
         # Should complete without errors
         assert len(discoverer._tasks) == 0
+
+
+"""Unit tests for Discoverer checkRemoteNodes and checkOfflineNodes."""
+
+import time
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from moleculerpy.discoverer import CLEAN_OFFLINE_NODES_TIMEOUT
+
+
+def _make_discoverer(heartbeat_interval=5.0, heartbeat_timeout=15.0):
+    broker = MagicMock()
+    broker.settings.heartbeat_interval = heartbeat_interval
+    broker.settings.heartbeat_timeout = heartbeat_timeout
+    broker.logger = MagicMock()
+
+    transit = MagicMock()
+    broker.transit = transit
+
+    d = Discoverer(broker)
+    return d, broker, transit
+
+
+class TestCheckRemoteNodes:
+    def test_marks_timed_out_node_disconnected(self):
+        d, broker, transit = _make_discoverer(heartbeat_timeout=10.0)
+        node = MagicMock()
+        node.local = False
+        node.available = True
+        node.lastHeartbeatTime = time.time() - 20  # 20s ago, timeout is 10s
+
+        transit.node_catalog.nodes = {"remote-1": node}
+        transit.node_catalog.disconnect_node = MagicMock()
+
+        d.check_remote_nodes()
+
+        transit.node_catalog.disconnect_node.assert_called_once_with("remote-1", unexpected=True)
+
+    def test_skips_local_node(self):
+        d, broker, transit = _make_discoverer(heartbeat_timeout=10.0)
+        node = MagicMock()
+        node.local = True
+        node.available = True
+        node.lastHeartbeatTime = time.time() - 100
+
+        transit.node_catalog.nodes = {"local": node}
+        transit.node_catalog.disconnect_node = MagicMock()
+
+        d.check_remote_nodes()
+
+        transit.node_catalog.disconnect_node.assert_not_called()
+
+    def test_skips_already_unavailable(self):
+        d, broker, transit = _make_discoverer(heartbeat_timeout=10.0)
+        node = MagicMock()
+        node.local = False
+        node.available = False
+        node.lastHeartbeatTime = time.time() - 100
+
+        transit.node_catalog.nodes = {"offline": node}
+        transit.node_catalog.disconnect_node = MagicMock()
+
+        d.check_remote_nodes()
+
+        transit.node_catalog.disconnect_node.assert_not_called()
+
+    def test_initializes_missing_heartbeat_time(self):
+        d, broker, transit = _make_discoverer(heartbeat_timeout=10.0)
+        node = MagicMock()
+        node.local = False
+        node.available = True
+        node.lastHeartbeatTime = None
+
+        transit.node_catalog.nodes = {"new": node}
+        transit.node_catalog.disconnect_node = MagicMock()
+
+        d.check_remote_nodes()
+
+        transit.node_catalog.disconnect_node.assert_not_called()
+        assert node.lastHeartbeatTime is not None
+
+    def test_healthy_node_not_disconnected(self):
+        d, broker, transit = _make_discoverer(heartbeat_timeout=10.0)
+        node = MagicMock()
+        node.local = False
+        node.available = True
+        node.lastHeartbeatTime = time.time() - 3  # 3s ago, timeout is 10s
+
+        transit.node_catalog.nodes = {"healthy": node}
+        transit.node_catalog.disconnect_node = MagicMock()
+
+        d.check_remote_nodes()
+
+        transit.node_catalog.disconnect_node.assert_not_called()
+
+
+class TestCheckOfflineNodes:
+    def test_removes_long_offline_node(self):
+        d, broker, transit = _make_discoverer()
+        node = MagicMock()
+        node.local = False
+        node.available = False
+        node.lastHeartbeatTime = time.time() - (CLEAN_OFFLINE_NODES_TIMEOUT + 60)
+
+        transit.node_catalog.nodes = {"dead": node}
+        transit.node_catalog.remove_node = MagicMock()
+
+        d.check_offline_nodes()
+
+        transit.node_catalog.remove_node.assert_called_once_with("dead")
+
+    def test_keeps_recently_offline_node(self):
+        d, broker, transit = _make_discoverer()
+        node = MagicMock()
+        node.local = False
+        node.available = False
+        node.lastHeartbeatTime = time.time() - 30  # Only 30s offline
+
+        transit.node_catalog.nodes = {"recent": node}
+        transit.node_catalog.remove_node = MagicMock()
+
+        d.check_offline_nodes()
+
+        transit.node_catalog.remove_node.assert_not_called()
+
+    def test_skips_available_node(self):
+        d, broker, transit = _make_discoverer()
+        node = MagicMock()
+        node.local = False
+        node.available = True
+        node.lastHeartbeatTime = time.time() - 9999
+
+        transit.node_catalog.nodes = {"alive": node}
+        transit.node_catalog.remove_node = MagicMock()
+
+        d.check_offline_nodes()
+
+        transit.node_catalog.remove_node.assert_not_called()
+
+
+class TestDiscovererLifecycle:
+    @pytest.mark.asyncio
+    async def test_stop_resets_started_flag(self):
+        d, _, _ = _make_discoverer()
+        await d.start()
+        assert d._started is True
+        await d.stop()
+        assert d._started is False
+
+    @pytest.mark.asyncio
+    async def test_start_creates_three_tasks(self):
+        d, _, _ = _make_discoverer()
+        await d.start()
+        assert len(d._tasks) == 3
+        await d.stop()
+
+    @pytest.mark.asyncio
+    async def test_restart_after_stop(self):
+        d, _, _ = _make_discoverer()
+        await d.start()
+        await d.stop()
+        assert d._started is False
+        await d.start()
+        assert d._started is True
+        assert len(d._tasks) == 3
+        await d.stop()
+
+    @pytest.mark.asyncio
+    async def test_zero_interval_no_tasks(self):
+        d, _, _ = _make_discoverer(heartbeat_interval=0)
+        await d.start()
+        assert len(d._tasks) == 0

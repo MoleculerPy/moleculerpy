@@ -363,30 +363,52 @@ class Transit:
         ]
         await self.transporter.make_subscriptions(topic_list)
 
+    _RECONNECT_DELAY: float = 5.0  # Seconds between reconnect attempts (Node.js: 5000ms)
+
     async def connect(self) -> None:
         """Establish connection and initialize the node in the cluster.
 
+        Matches Node.js Moleculer transit.connect() with retry loop:
+        on connection failure, waits 5 seconds and retries unless
+        settings.disable_reconnect is True.
+
         Emits $transporter.connected internal event (Moleculer.js compatible).
         """
-        was_reconnect = self._was_connected
-        await self.transporter.connect()
-        # Subscribe BEFORE discover/send_node_info — critical for eventually-
-        # consistent transports (Kafka): consumer must be ready before we
-        # broadcast DISCOVER, otherwise responses arrive before we're listening.
-        await self._make_subscriptions()
-        await self.discover()
-        await self.send_node_info()
+        disable_reconnect = getattr(self.settings, "disable_reconnect", False)
 
-        # Mark as connected and emit event
-        self._was_connected = True
-        self._emit_transporter_event(
-            "$transporter.connected",
-            {
-                "wasReconnect": was_reconnect,
-            },
-        )
+        while True:
+            try:
+                was_reconnect = self._was_connected
+                await self.transporter.connect()
+                # Subscribe BEFORE discover/send_node_info — critical for
+                # eventually-consistent transports (Kafka): consumer must be
+                # ready before we broadcast DISCOVER.
+                await self._make_subscriptions()
+                await self.discover()
+                await self.send_node_info()
 
-        self.logger.info(f"Transit connected for node {self.node_id}")
+                # Mark as connected and emit event
+                self._was_connected = True
+                self._emit_transporter_event(
+                    "$transporter.connected",
+                    {
+                        "wasReconnect": was_reconnect,
+                    },
+                )
+
+                self.logger.info(f"Transit connected for node {self.node_id}")
+                return  # Success — exit retry loop
+
+            except asyncio.CancelledError:
+                raise  # Don't retry on cancellation
+            except Exception as e:
+                if disable_reconnect:
+                    raise  # No retry — propagate error
+
+                self.logger.warning(
+                    f"Connection failed: {e}. Retrying in {self._RECONNECT_DELAY}s..."
+                )
+                await asyncio.sleep(self._RECONNECT_DELAY)
 
     async def disconnect(self) -> None:
         """Gracefully disconnect from the cluster."""
