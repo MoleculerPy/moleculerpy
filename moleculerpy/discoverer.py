@@ -113,3 +113,4 @@ class Discoverer:
                 pass
             finally:
                 self._tasks.clear()
+                self._started = False  # Allow restart after stop-start cycle

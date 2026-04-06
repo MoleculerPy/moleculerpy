@@ -6,7 +6,6 @@ from typing import Any, Final
 
 from moleculerpy import Context, Service, action
 
-
 PRODUCTS: Final[dict[str, dict[str, Any]]] = {
     "starter-kit": {
         "id": "starter-kit",

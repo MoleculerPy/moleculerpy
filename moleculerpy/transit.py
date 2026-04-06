@@ -11,6 +11,7 @@ Internal events emitted (Moleculer.js compatible):
 
 import asyncio
 import copy
+import logging
 import time
 import traceback
 from collections.abc import Awaitable, Callable
@@ -21,6 +22,7 @@ from .metrics import MetricsCollector, get_static_metrics
 if TYPE_CHECKING:
     from .broker import ServiceBroker
     from .context import Context
+    from .latency import LatencyMonitor
     from .lifecycle import Lifecycle
     from .node import NodeCatalog
     from .registry import Action, Event, Registry
@@ -68,7 +70,7 @@ class Transit:
         registry: "Registry",
         node_catalog: "NodeCatalog",
         settings: "Settings",
-        logger: Any,
+        logger: logging.Logger,
         lifecycle: "Lifecycle",
     ) -> None:
         """Initialize the Transit layer.
@@ -126,7 +128,7 @@ class Transit:
         }
 
         # Phase 5: Latency monitor reference (set by broker)
-        self._latency_monitor: Any = None
+        self._latency_monitor: LatencyMonitor | None = None
 
         # Phase 5.1: Metrics collector for CPU/memory tracking
         self._metrics_collector = MetricsCollector()
@@ -137,8 +139,15 @@ class Transit:
         # Broker reference for middleware wrapping (set by broker after creation)
         self._broker: ServiceBroker | None = None
 
-        # Wrapped publish method (set by _wrap_methods)
+        # Rate-limit discover_node: track pending DISCOVER requests with timestamps.
+        # Prevents flooding when repeated heartbeats arrive from unknown/offline
+        # nodes. Entries expire after 30s so retries are possible if INFO is lost.
+        # Cleared immediately in _handle_info on successful receipt.
+        self._discover_pending: dict[str, float] = {}
+
+        # Wrapped methods (set by _wrap_methods, None until broker starts)
         self._wrapped_publish: Callable[[Packet], Awaitable[None]] | None = None
+        self._wrapped_message_handler: Callable[[Packet], Awaitable[None]] | None = None
 
         # Guard against repeated broker.stop() on NodeID conflict
         self._shutting_down: bool = False
@@ -273,7 +282,7 @@ class Transit:
         Args:
             packet: Incoming packet to process
         """
-        if hasattr(self, "_wrapped_message_handler"):
+        if self._wrapped_message_handler is not None:
             await self._wrapped_message_handler(packet)
         else:
             await self._message_handler_core(packet)
@@ -333,19 +342,26 @@ class Transit:
             (Topic.INFO.value, None),
             (Topic.INFO.value, self.node_id),
             (Topic.DISCOVER.value, None),
+            (Topic.DISCOVER.value, self.node_id),  # Targeted DISCOVER (for discover_node)
             (Topic.HEARTBEAT.value, None),
             (Topic.REQUEST.value, self.node_id),
             (Topic.RESPONSE.value, self.node_id),
             (Topic.EVENT.value, self.node_id),
-            (Topic.EVENT_ACK.value, self.node_id),  # Phase 3C: Event Ack subscription
+            (Topic.EVENT_ACK.value, self.node_id),
             (Topic.DISCONNECT.value, None),
-            # Phase 5: Latency measurement subscriptions
-            (Topic.PING.value, self.node_id),
+            (Topic.PING.value, None),  # Broadcast PING (matches Node.js)
+            (Topic.PING.value, self.node_id),  # Targeted PING
             (Topic.PONG.value, self.node_id),
         ]
 
-        for topic, node_id in subscriptions:
-            await self.transporter.subscribe(topic, node_id)
+        # Batch subscribe — base impl calls subscribe() per topic; transporters
+        # with batch semantics (Kafka ConsumerGroup) override make_subscriptions.
+        from .transporter.base import SubscriptionTopic  # noqa: PLC0415
+
+        topic_list: list[SubscriptionTopic] = [
+            {"cmd": cmd, "nodeID": nid} for cmd, nid in subscriptions
+        ]
+        await self.transporter.make_subscriptions(topic_list)
 
     async def connect(self) -> None:
         """Establish connection and initialize the node in the cluster.
@@ -354,9 +370,12 @@ class Transit:
         """
         was_reconnect = self._was_connected
         await self.transporter.connect()
+        # Subscribe BEFORE discover/send_node_info — critical for eventually-
+        # consistent transports (Kafka): consumer must be ready before we
+        # broadcast DISCOVER, otherwise responses arrive before we're listening.
+        await self._make_subscriptions()
         await self.discover()
         await self.send_node_info()
-        await self._make_subscriptions()
 
         # Mark as connected and emit event
         self._was_connected = True
@@ -434,6 +453,39 @@ class Transit:
         """Send a discovery request to find other nodes in the cluster."""
         await self.publish(Packet(Topic.DISCOVER, None, {}))
 
+    async def discover_node(self, node_id: str) -> None:
+        """Send a targeted discovery request to a specific node.
+
+        Matches Node.js Moleculer base discoverer's `discoverNode(nodeID)`.
+        Triggered when a heartbeat arrives from an unknown/restarted/changed node
+        so the remote will reply with a fresh INFO packet.
+
+        Args:
+            node_id: Target node ID
+        """
+        await self.publish(Packet(Topic.DISCOVER, node_id, {}))
+
+    _DISCOVER_COOLDOWN: float = 30.0  # Seconds before retrying DISCOVER for same node
+
+    async def _request_discovery(self, sender: str, reason: str) -> None:
+        """Rate-limited discovery request. Prevents DISCOVER flooding.
+
+        Entries in _discover_pending expire after _DISCOVER_COOLDOWN seconds
+        so retries are possible if the INFO response is lost.
+        """
+        now = time.time()
+        last = self._discover_pending.get(sender)
+        if last is not None and (now - last) < self._DISCOVER_COOLDOWN:
+            return  # Cooldown active — skip
+
+        self._discover_pending[sender] = now
+        self.logger.debug(f"Heartbeat from {reason} node '{sender}', requesting INFO")
+        try:
+            await self.discover_node(sender)
+        except Exception as e:
+            self.logger.warning(f"Failed to send targeted DISCOVER to '{sender}': {e}")
+            self._discover_pending.pop(sender, None)
+
     async def beat(self) -> None:
         """Send a heartbeat with current node metrics.
 
@@ -482,13 +534,33 @@ class Transit:
     async def _handle_discover(self, packet: Packet) -> None:
         """Handle discovery requests by sending node info.
 
+        Matches Node.js Moleculer pattern:
+        - Targeted DISCOVER (has sender) → reply with targeted INFO to sender
+        - Broadcast DISCOVER (no sender) → reply with broadcast INFO
+
         Args:
             packet: Discovery packet
         """
-        await self.send_node_info()
+        if packet.sender and packet.sender != self.node_id:
+            # Reply directly to requester (targeted INFO)
+            if self.node_catalog.local_node:
+                node_info = self.node_catalog.local_node.get_info()
+                await self.publish(Packet(Topic.INFO, packet.sender, node_info))
+        else:
+            # Broadcast DISCOVER — reply with broadcast INFO
+            await self.send_node_info()
 
     async def _handle_heartbeat(self, packet: Packet) -> None:
         """Handle heartbeat packets from other nodes.
+
+        Matches Node.js Moleculer base discoverer.heartbeatReceived():
+        - Unknown sender → request a fresh INFO via targeted DISCOVER
+        - Known but offline → request fresh INFO (reconnect)
+        - Otherwise update metrics
+
+        This is critical for eventually-consistent transports (Kafka) where
+        the initial DISCOVER may race against subscribe — heartbeats then
+        bootstrap the missing handshake.
 
         Updates node metrics from heartbeat:
         - cpu: CPU usage percentage (Moleculer.js compatible)
@@ -499,20 +571,27 @@ class Transit:
         Args:
             packet: Heartbeat packet
         """
-        if not packet.sender:
-            return
+        if not packet.sender or packet.sender == self.node_id:
+            return  # Ignore own heartbeats (Node.js: sender === this.broker.nodeID)
 
         node = self.node_catalog.get_node(packet.sender)
-        if node:
-            # Update Moleculer.js compatible metrics
-            node.cpu = packet.payload.get("cpu", 0)
-            node.cpuSeq = packet.payload.get("cpuSeq", 0)
+        if node is None:
+            await self._request_discovery(packet.sender, "unknown")
+            return
 
-            # Update Python extension metrics
-            node.memory = packet.payload.get("memory", 0.0)
+        if not getattr(node, "available", True):
+            await self._request_discovery(packet.sender, "offline")
+            return
 
-            # Update timestamp for health monitoring
-            node.lastHeartbeatTime = time.time()
+        # Update Moleculer.js compatible metrics
+        node.cpu = packet.payload.get("cpu", 0)
+        node.cpuSeq = packet.payload.get("cpuSeq", 0)
+
+        # Update Python extension metrics
+        node.memory = packet.payload.get("memory", 0.0)
+
+        # Update timestamp for health monitoring
+        node.lastHeartbeatTime = time.time()
 
     async def _handle_info(self, packet: Packet) -> None:
         """Handle node info packets.
@@ -522,6 +601,9 @@ class Transit:
         """
         if not packet.payload or not packet.sender:
             return
+
+        # Clear discover-pending flag — INFO response received successfully.
+        self._discover_pending.pop(packet.sender, None)
 
         # Route INFO updates through NodeCatalog to avoid duplicate registrations.
         allowed_fields = {

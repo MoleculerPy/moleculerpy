@@ -24,6 +24,7 @@ import weakref
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from ..serializers import to_packet_type
 from .base import Transporter
 
 logger = logging.getLogger(__name__)
@@ -322,15 +323,17 @@ class MemoryTransporter(Transporter):
         # Import here to avoid circular imports
         from ..packet import Packet  # noqa: PLC0415
 
-        try:
-            payload = await self.transit.serializer.deserialize_async(data)
-        except Exception as e:
-            logger.exception("Failed to deserialize message: %s", e)
-            return
-
         packet_type = meta.get("packet_type")
         if packet_type is None:
             logger.error("packet_type missing from meta")
+            return
+
+        try:
+            payload = await self.transit.serializer.deserialize_async(
+                data, packet_type=to_packet_type(packet_type.value)
+            )
+        except Exception as e:
+            logger.exception("Failed to deserialize message: %s", e)
             return
 
         sender = payload.get("sender")
@@ -374,7 +377,9 @@ class MemoryTransporter(Transporter):
 
         topic = self.get_topic_name(packet.type.value, packet.target)
         payload = {**packet.payload, "ver": _PROTOCOL_VERSION, "sender": self.node_id}
-        serialized = await self.transit.serializer.serialize_async(payload)
+        serialized = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
 
         # Send through middleware chain; include sender for self-echo guard
         meta = {"packet": packet, "sender": self.node_id}

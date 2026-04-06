@@ -205,20 +205,25 @@ class TestTransit:
                 (Topic.INFO.value, None),
                 (Topic.INFO.value, "test-node-123"),
                 (Topic.DISCOVER.value, None),
+                (Topic.DISCOVER.value, "test-node-123"),  # Targeted DISCOVER
                 (Topic.HEARTBEAT.value, None),
                 (Topic.REQUEST.value, "test-node-123"),
                 (Topic.RESPONSE.value, "test-node-123"),
                 (Topic.EVENT.value, "test-node-123"),
-                (Topic.EVENT_ACK.value, "test-node-123"),  # Phase 3C: Event Ack subscription
+                (Topic.EVENT_ACK.value, "test-node-123"),
                 (Topic.DISCONNECT.value, None),
-                (Topic.PING.value, "test-node-123"),  # Phase 5: Latency measurement
-                (Topic.PONG.value, "test-node-123"),  # Phase 5: Latency measurement
+                (Topic.PING.value, None),  # Broadcast PING (Node.js parity)
+                (Topic.PING.value, "test-node-123"),  # Targeted PING
+                (Topic.PONG.value, "test-node-123"),
             ]
 
-            assert mock_transporter.subscribe.call_count == len(expected_calls)
+            # Transit now batches via make_subscriptions(topics_list).
+            # Verify that the batch call contains all expected topics.
+            mock_transporter.make_subscriptions.assert_called_once()
+            topics_arg = mock_transporter.make_subscriptions.call_args[0][0]
+            assert len(topics_arg) == len(expected_calls)
             for i, (topic, node_id) in enumerate(expected_calls):
-                call_args = mock_transporter.subscribe.call_args_list[i][0]
-                assert call_args == (topic, node_id)
+                assert topics_arg[i] == {"cmd": topic, "nodeID": node_id}
 
     @pytest.mark.asyncio
     async def test_handle_discover(self, mock_dependencies, mock_transporter):
@@ -1582,3 +1587,93 @@ class TestTransitP0SafetyFixes:
 
             # broker.stop() should only have been called once
             transit._broker.stop.assert_called_once()
+
+
+class TestHeartbeatDiscovery:
+    """Tests for heartbeat-driven discovery (Node.js heartbeatReceived parity)."""
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_unknown_sender_triggers_discover(
+        self, mock_dependencies, mock_transporter
+    ):
+        """Heartbeat from unknown node triggers targeted DISCOVER."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            transit.node_catalog = MagicMock()
+            transit.node_catalog.get_node.return_value = None  # Unknown
+            transit.discover_node = AsyncMock()
+
+            packet = Packet(Topic.HEARTBEAT, "unknown-node", {"cpu": 50})
+            packet.sender = "unknown-node"
+            await transit._handle_heartbeat(packet)
+
+            transit.discover_node.assert_awaited_once_with("unknown-node")
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_offline_node_triggers_discover(
+        self, mock_dependencies, mock_transporter
+    ):
+        """Heartbeat from offline (known but unavailable) node triggers DISCOVER."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            mock_node = MagicMock()
+            mock_node.available = False
+            transit.node_catalog = MagicMock()
+            transit.node_catalog.get_node.return_value = mock_node
+            transit.discover_node = AsyncMock()
+
+            packet = Packet(Topic.HEARTBEAT, "offline-node", {"cpu": 30})
+            packet.sender = "offline-node"
+            await transit._handle_heartbeat(packet)
+
+            transit.discover_node.assert_awaited_once_with("offline-node")
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_known_node_updates_metrics(self, mock_dependencies, mock_transporter):
+        """Heartbeat from known available node updates metrics normally."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            mock_node = MagicMock()
+            mock_node.available = True
+            transit.node_catalog = MagicMock()
+            transit.node_catalog.get_node.return_value = mock_node
+            transit.discover_node = AsyncMock()
+
+            packet = Packet(Topic.HEARTBEAT, "known-node", {"cpu": 75, "cpuSeq": 5})
+            packet.sender = "known-node"
+            await transit._handle_heartbeat(packet)
+
+            # Should NOT trigger discover
+            transit.discover_node.assert_not_awaited()
+            # Should update metrics
+            assert mock_node.cpu == 75
+            assert mock_node.cpuSeq == 5
+
+    @pytest.mark.asyncio
+    async def test_discover_node_sends_targeted_packet(self, mock_dependencies, mock_transporter):
+        """discover_node() sends targeted DISCOVER to specific node."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            transit.publish = AsyncMock()
+
+            await transit.discover_node("target-node")
+
+            transit.publish.assert_awaited_once()
+            packet = transit.publish.call_args[0][0]
+            assert packet.type == Topic.DISCOVER
+            assert packet.target == "target-node"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_no_sender_ignored(self, mock_dependencies, mock_transporter):
+        """Heartbeat without sender is silently ignored."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            transit.discover_node = AsyncMock()
+            transit.node_catalog = MagicMock()
+
+            packet = Packet(Topic.HEARTBEAT, None, {"cpu": 50})
+            packet.sender = None
+            await transit._handle_heartbeat(packet)
+
+            transit.discover_node.assert_not_awaited()
+            transit.node_catalog.get_node.assert_not_called()

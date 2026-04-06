@@ -108,8 +108,8 @@ class Stats:
 ║    - P50 (Median):   {p50:>8.2f}                        ║
 ║    - P95:            {p95:>8.2f}                        ║
 ║    - P99:            {p99:>8.2f}                        ║
-║    - Min:            {min(self.response_times)*1000:>8.2f}                        ║
-║    - Max:            {max(self.response_times)*1000:>8.2f}                        ║
+║    - Min:            {min(self.response_times) * 1000:>8.2f}                        ║
+║    - Max:            {max(self.response_times) * 1000:>8.2f}                        ║
 ╚════════════════════════════════════════════════════════╝
 """
 
@@ -147,10 +147,10 @@ class InteractiveClient:
                 result = await self.broker.call("flaky.unreliable", {})
                 duration = time.perf_counter() - start
                 successes += 1
-                print(f"  [{i+1}] SUCCESS in {duration*1000:.1f}ms: {result['node_id']}")
+                print(f"  [{i + 1}] SUCCESS in {duration * 1000:.1f}ms: {result['node_id']}")
             except Exception as e:
                 failures += 1
-                print(f"  [{i+1}] FAILED: {type(e).__name__}: {e}")
+                print(f"  [{i + 1}] FAILED: {type(e).__name__}: {e}")
 
         print(f"\nResults: {successes} successes, {failures} failures")
 
@@ -161,10 +161,10 @@ class InteractiveClient:
         for i in range(count):
             try:
                 await self.broker.call("flaky.always_fail", {})
-                print(f"  [{i+1}] SUCCESS (unexpected!)")
+                print(f"  [{i + 1}] SUCCESS (unexpected!)")
             except Exception as e:
                 error_type = "CIRCUIT OPEN" if "circuit" in str(e).lower() else "SERVICE ERROR"
-                print(f"  [{i+1}] {error_type}: {type(e).__name__}")
+                print(f"  [{i + 1}] {error_type}: {type(e).__name__}")
             await asyncio.sleep(0.1)
 
     async def test_timeout(self) -> None:
@@ -177,7 +177,7 @@ class InteractiveClient:
             start = time.perf_counter()
             result = await self.broker.call("slow.process", {"delay": 0.1})
             duration = time.perf_counter() - start
-            print(f"   SUCCESS in {duration*1000:.1f}ms: {result}")
+            print(f"   SUCCESS in {duration * 1000:.1f}ms: {result}")
         except Exception as e:
             print(f"   FAILED: {e}")
 
@@ -187,10 +187,10 @@ class InteractiveClient:
             start = time.perf_counter()
             result = await self.broker.call("slow.process", {"delay": 3.0})
             duration = time.perf_counter() - start
-            print(f"   SUCCESS in {duration*1000:.1f}ms: {result}")
+            print(f"   SUCCESS in {duration * 1000:.1f}ms: {result}")
         except Exception as e:
             duration = time.perf_counter() - start
-            print(f"   TIMEOUT after {duration*1000:.1f}ms: {type(e).__name__}")
+            print(f"   TIMEOUT after {duration * 1000:.1f}ms: {type(e).__name__}")
 
     async def test_counter(self, count: int = 10) -> None:
         """Test counter service (shows load balancing if multiple servers)."""
@@ -203,9 +203,9 @@ class InteractiveClient:
                 result = await self.broker.call("counter.increment", {})
                 node_id = result["node_id"]
                 node_counts[node_id] = node_counts.get(node_id, 0) + 1
-                print(f"  [{i+1}] {node_id}: count={result['count']}")
+                print(f"  [{i + 1}] {node_id}: count={result['count']}")
             except Exception as e:
-                print(f"  [{i+1}] FAILED: {e}")
+                print(f"  [{i + 1}] FAILED: {e}")
 
         print(f"\nLoad distribution: {node_counts}")
 
@@ -217,10 +217,10 @@ class InteractiveClient:
         concurrency: int = 10,
     ) -> None:
         """Run load test with concurrent requests."""
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"  LOAD TEST: {action}")
         print(f"  Requests: {total_requests}, Concurrency: {concurrency}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         self.stats = Stats()
         semaphore = asyncio.Semaphore(concurrency)
@@ -234,7 +234,7 @@ class InteractiveClient:
                     duration = time.perf_counter() - req_start
                     self.stats.record_success(duration)
                     if request_id % 10 == 0:
-                        print(f"  Request {request_id}: OK ({duration*1000:.1f}ms)")
+                        print(f"  Request {request_id}: OK ({duration * 1000:.1f}ms)")
                 except Exception as e:
                     duration = time.perf_counter() - req_start
                     self.stats.record_failure(e, duration)

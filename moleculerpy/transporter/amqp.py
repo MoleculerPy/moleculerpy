@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from ..transit import Transit
 
 from ..packet import Packet, Topic
+from ..serializers import to_packet_type
 from .base import Transporter
 
 # Moleculer protocol version (must match transit.PROTOCOL_VERSION)
@@ -356,7 +357,9 @@ class AmqpTransporter(Transporter):
 
         topic = self.get_topic_name(packet.type.value, packet.target)
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        serialized = await self.transit.serializer.serialize_async(payload)
+        serialized = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
 
         meta = {"packet": packet, "balanced": False}
         await self.send_with_middleware(topic, serialized, meta)
@@ -373,7 +376,9 @@ class AmqpTransporter(Transporter):
 
         topic = f"{self.prefix}.REQB.{action}"
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        data = await self.transit.serializer.serialize_async(payload)
+        data = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
         await self.send_with_middleware(topic, data, {"packet": packet, "balanced": True})
 
     async def publish_balanced_event(self, packet: Packet, group: str) -> None:
@@ -388,7 +393,9 @@ class AmqpTransporter(Transporter):
 
         topic = f"{self.prefix}.EVENTB.{group}.{event}"
         payload = {**packet.payload, "ver": PROTOCOL_VERSION, "sender": self.node_id}
-        data = await self.transit.serializer.serialize_async(payload)
+        data = await self.transit.serializer.serialize_async(
+            payload, packet_type=to_packet_type(packet.type.value)
+        )
         await self.send_with_middleware(topic, data, {"packet": packet, "balanced": True})
 
     async def unsubscribe_from_balanced_commands(self) -> None:
@@ -430,15 +437,17 @@ class AmqpTransporter(Transporter):
 
     async def receive(self, cmd: str, data: bytes, meta: dict[str, Any]) -> None:
         """Process received bytes after middleware. Deserialize and call handler."""
-        try:
-            payload = await self.transit.serializer.deserialize_async(data)
-        except Exception as e:
-            logger.warning("Failed to decode AMQP message, dropping: %r", e)
-            return
-
         packet_type = meta.get("packet_type")
         if packet_type is None:
             raise ValueError("packet_type missing from meta")
+
+        try:
+            payload = await self.transit.serializer.deserialize_async(
+                data, packet_type=to_packet_type(packet_type.value)
+            )
+        except Exception as e:
+            logger.warning("Failed to decode AMQP message, dropping: %r", e)
+            return
 
         sender = payload.get("sender")
         packet = Packet(packet_type, sender, payload)

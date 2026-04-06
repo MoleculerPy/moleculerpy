@@ -7,11 +7,18 @@ communication between MoleculerPy nodes over various messaging protocols.
 import importlib
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
     from ..packet import Packet
     from ..transit import Transit
+
+
+class SubscriptionTopic(TypedDict):
+    """Type for topic subscription entries passed to make_subscriptions."""
+
+    cmd: str
+    nodeID: str | None
 
 
 class Transporter(ABC):
@@ -104,6 +111,20 @@ class Transporter(ABC):
             meta: Metadata (subject, etc.)
         """
         pass
+
+    async def make_subscriptions(self, topics: list[SubscriptionTopic]) -> None:
+        """Batch subscribe to all topics at once.
+
+        Default implementation calls subscribe() for each topic. Transporters
+        that need batch subscription semantics (Kafka ConsumerGroup) override
+        this. Matches Node.js Moleculer makeSubscriptions(topics) on base
+        Transporter.
+
+        Args:
+            topics: List of {"cmd": str, "nodeID": str|None} dicts
+        """
+        for t in topics:
+            await self.subscribe(t["cmd"], t.get("nodeID"))
 
     async def subscribe_balanced_request(self, action: str) -> None:
         """Subscribe to balanced request topic for an action. No-op in base."""
