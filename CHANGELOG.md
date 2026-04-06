@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.19] - 2026-04-06
+
+### Fixed (Audit-driven fixes for v0.14.18 serializers — PRD-019)
+
+Post-release audit by 9 expert agents (2 rounds) identified correctness, security,
+and typing issues in the v0.14.18 CBOR/ProtoBuf implementation. All CRITICAL and
+HIGH findings fixed, plus code quality improvements.
+
+**Security (CRITICAL/HIGH):**
+- `MAX_PAYLOAD_BYTES` now enforced in sync path via template method pattern in
+  `BaseSerializer` — previously only async path checked, sync calls could OOM
+- CBOR `tag_hook=_reject_tag` added — rejects unknown CBOR tags, pin `cbor2>=5.6.0`
+  (CVE-2024-26130 fixed); documented limitation for well-known tags 0/1
+- ProtoBuf JSON depth protection via `_check_json_depth()` pre-scan — prevents
+  stack exhaustion DoS through deeply-nested attacker-controlled `meta`/`params`
+- Silent `pass` in JSON parse failures replaced with `logger.warning` for observability
+- Error messages sanitized — no payload content in exception strings
+- Per-field size limit (`MAX_NESTED_FIELD_BYTES=1MB`) for nested JSON fields
+
+**Correctness:**
+- ProtoBuf `DATATYPE_BUFFER` branch added — bytes fields now round-trip correctly
+  (was missing, resulted in base64 strings instead of bytes)
+- `params=None` now correctly marks `DATATYPE_NULL` (was unreachable branch)
+- `params=str` now JSON-stringified + base64 (was unhandled, caused proto error)
+- NATS incoming `deserialize_async` now passes `packet_type` from meta —
+  previously ProtoBuf hit bruteforce fallback silently
+- NATS `publish_balanced_request/event` now pass `packet_type` explicitly
+
+**Typing (strict mypy):**
+- Added `PacketType = Literal[...]` with exhaustive 12 packet types in `types.py`
+- Added `to_packet_type(value: str) -> PacketType` runtime validator
+- `_VALID_PACKET_TYPES` derived from `get_args(PacketType)` — single source of truth
+- Template method pattern: public `serialize`/`deserialize` enforce limits,
+  subclasses implement `_serialize_impl`/`_deserialize_impl`
+- Store-on-self pattern for optional modules (`self._cbor`, `self._mp`,
+  `self._parse_dict`) — eliminates runtime `None` checks in hot path
+- Two `except` clauses instead of `isinstance(e, SerializationError)` re-raise
+- Removed dead TYPE_CHECKING aliases in cbor/msgpack/protobuf
+
+**Code Quality:**
+- `_HEARTBEAT_MAX_FIELDS` constant instead of magic number with `noqa`
+- `_deserialize_bruteforce` warns each failed attempt via `logger.debug`
+- `nats.disconnect()` clears `self.nc = None` in `finally` (was leak on timeout)
+- JSON serializer logs `RecursionError` via `logger.warning` (DoS observability)
+- `__init__.py` docstring updated to document all 4 serializers + usage examples
+
+**Tests:**
+- +33 audit-driven tests: DATATYPE_BUFFER/NULL/JSON roundtrip, DISCONNECT packet,
+  RES with error dict, INFO with config/metadata, bruteforce fallback, heuristic
+  resolver, PacketType validator, CBOR tag security, broker integration
+- Unit: 2261 tests passing (was 2228)
+- Serializer tests: 105 passing (was 72)
+- Performance: all 4 serializers within 5% of v0.14.18 baseline
+
+### Audit Evidence
+- Round 1 (v0.14.18): 5 experts found 3 CRITICAL + 10 HIGH → all fixed
+- Round 2 (v0.14.19): 4 Python-native experts found 0 CRIT, 3 P1 + 8 nits → all fixed
+
 ## [0.14.18] - 2026-04-06
 
 ### Added
