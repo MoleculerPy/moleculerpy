@@ -2,7 +2,7 @@
 
 import pytest
 
-from moleculerpy.settings import Settings, SettingsValidationError
+from moleculerpy.settings import Settings, SettingsValidationError, TrackingConfig
 
 
 class TestSettings:
@@ -331,3 +331,25 @@ class TestSettings:
 
         assert "PLAIN" in Settings.VALID_LOG_FORMATS
         assert "JSON" in Settings.VALID_LOG_FORMATS
+
+
+class TestTrackingConfig:
+    """Test TrackingConfig dataclass and Settings integration."""
+
+    def test_tracking_config_defaults(self):
+        s = Settings()
+        assert s.tracking.enabled is False
+        assert s.tracking.shutdown_timeout == 5.0
+
+    def test_tracking_config_custom(self):
+        s = Settings(tracking=TrackingConfig(enabled=True, shutdown_timeout=10.0))
+        assert s.tracking.enabled is True
+        assert s.tracking.shutdown_timeout == 10.0
+
+    def test_tracking_config_validation(self):
+        with pytest.raises(SettingsValidationError) as exc_info:
+            Settings(tracking=TrackingConfig(shutdown_timeout=-1.0))
+        assert "tracking.shutdown_timeout" in str(exc_info.value)
+
+        with pytest.raises(SettingsValidationError):
+            Settings(tracking=TrackingConfig(shutdown_timeout=0))

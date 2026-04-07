@@ -137,6 +137,16 @@ class ServiceBroker:
 
         self._validator = resolve_validator(getattr(self.settings, "validator", "default"))
 
+        # Auto-register ContextTracker middleware if tracking enabled
+        tracking_cfg = getattr(self.settings, "tracking", None)
+        if tracking_cfg is not None and getattr(tracking_cfg, "enabled", False):
+            from .middleware.context_tracker import ContextTrackerMiddleware  # noqa: PLC0415
+
+            # TrackingConfig.shutdown_timeout is float seconds;
+            # ContextTrackerMiddleware expects int milliseconds.
+            shutdown_timeout_ms = int(tracking_cfg.shutdown_timeout * 1000)
+            self.middlewares.append(ContextTrackerMiddleware(shutdown_timeout=shutdown_timeout_ms))
+
         # Wrapped event methods (set during start() by middleware)
         self._wrapped_emit: (
             Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[Any]] | None
@@ -264,21 +274,50 @@ class ServiceBroker:
         Returns:
             List of coroutines if is_async=True, None otherwise
         """
+        # Node.js Moleculer uses short hook names (starting/started/stopping/stopped)
+        # while MoleculerPy historically used broker_* names. To maintain backward
+        # compatibility AND Node.js ecosystem compatibility, we invoke both names.
+        # Note: "stopped" is intentionally NOT aliased because MoleculerPy's existing
+        # stopped() hook takes no arguments (middleware self-cleanup), which would
+        # collide with Node.js stopped(broker) signature.
+        from .middleware.base import Middleware as _BaseMiddleware  # noqa: PLC0415
+
+        _broker_hook_aliases = {
+            "broker_starting": "starting",
+            "broker_started": "started",
+            "broker_stopping": "stopping",
+        }
+        alias = _broker_hook_aliases.get(hook_name)
+
+        def _is_overridden(mw: Any, name: str) -> bool:
+            """True if mw class overrides the alias method (not base no-op)."""
+            mw_method = getattr(type(mw), name, None)
+            base_method = getattr(_BaseMiddleware, name, None)
+            return mw_method is not None and mw_method is not base_method
+
         if is_async:
             coroutines = []
             for middleware in self.middlewares:
-                hook = getattr(middleware, hook_name, None)
-                if hook and callable(hook):
-                    result = hook(*args)
-                    if asyncio.iscoroutine(result):
-                        coroutines.append(result)
+                names = [hook_name]
+                if alias and _is_overridden(middleware, alias):
+                    names.append(alias)
+                for name in names:
+                    hook = getattr(middleware, name, None)
+                    if hook and callable(hook):
+                        result = hook(*args)
+                        if asyncio.iscoroutine(result):
+                            coroutines.append(result)
             return coroutines if coroutines else None
         else:
             # Synchronous hooks
             for middleware in self.middlewares:
-                hook = getattr(middleware, hook_name, None)
-                if hook and callable(hook):
-                    hook(*args)
+                names = [hook_name]
+                if alias and _is_overridden(middleware, alias):
+                    names.append(alias)
+                for name in names:
+                    hook = getattr(middleware, name, None)
+                    if hook and callable(hook):
+                        hook(*args)
             return None
 
     async def _execute_middleware_hooks(
@@ -558,6 +597,13 @@ class ServiceBroker:
             # Stop cacher (cleanup background tasks, clear locks)
             if self.cacher:
                 await self.cacher.stop()
+
+            # Drain: notify peers we're shutting down (empty services) so
+            # they stop routing new requests to us BEFORE we DISCONNECT.
+            try:
+                await self.transit.send_disconnect_info()
+            except Exception as e:
+                self.logger.warning(f"Error sending drain INFO: {e}")
 
             # Disconnect from the cluster
             await self.transit.disconnect()

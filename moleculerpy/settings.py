@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
@@ -10,6 +11,25 @@ class SettingsValidationError(ValueError):
     """Raised when Settings validation fails."""
 
     pass
+
+
+@dataclass
+class TrackingConfig:
+    """Configuration for context tracking / graceful shutdown.
+
+    Mirrors Node.js Moleculer's ``tracking`` broker option.
+
+    Attributes:
+        enabled: If True, ContextTracker tracks active contexts so the
+            broker can wait for them to complete during graceful stop.
+            Defaults to False, matching Node.js Moleculer.
+        shutdown_timeout: Maximum time (in seconds) to wait for in-flight
+            contexts to finish during shutdown. Defaults to 5.0 seconds
+            (Node.js default is 5000ms).
+    """
+
+    enabled: bool = False
+    shutdown_timeout: float = 5.0
 
 
 class Settings:
@@ -84,6 +104,7 @@ class Settings:
         namespace: str | None = None,
         disable_balancer: bool = False,
         validator: "str | bool | type[BaseValidator] | BaseValidator | None" = "default",
+        tracking: TrackingConfig | None = None,
     ) -> None:
         self.transporter = transporter
         self.serializer = serializer
@@ -103,6 +124,7 @@ class Settings:
         self.namespace = namespace
         self.disable_balancer = disable_balancer
         self.validator = validator
+        self.tracking = tracking if tracking is not None else TrackingConfig()
 
         # Validate all settings
         self._validate()
@@ -170,6 +192,12 @@ class Settings:
             raise SettingsValidationError(
                 f"transporter must be a valid URL (e.g., 'nats://localhost:4222'), "
                 f"got '{self.transporter}'"
+            )
+
+        # Validate tracking
+        if self.tracking.shutdown_timeout <= 0:
+            raise SettingsValidationError(
+                f"tracking.shutdown_timeout must be positive, got {self.tracking.shutdown_timeout}"
             )
 
         # Validate strategy

@@ -92,9 +92,17 @@ message PacketDisconnect {
 }
 
 message PacketHeartbeat {
-	string ver 		= 1;
-	string sender 	= 2;
-	double cpu 		= 3;
+	string ver 			= 1;
+	string sender 		= 2;
+	double cpu 			= 3;
+	// MoleculerPy extension fields (4-7) for restart detection.
+	// Wire-compatible with Node.js: unknown fields are silently ignored
+	// by Node.js ProtoBuf parser. Field numbers 4-7 are RESERVED FOREVER.
+	// See: .forgeplan/adrs/ADR-heartbeat-schema.md
+	int32 seq 			= 4;
+	string instanceID 	= 5;
+	double memory 		= 6;
+	int32 cpuSeq 		= 7;
 }
 
 message PacketPing {

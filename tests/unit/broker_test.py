@@ -362,3 +362,25 @@ async def test_broker_call_remote_action_with_error(
         await broker.call("remote.error")
 
     mock_transit.request.assert_called_once_with(endpoint, context)
+
+
+def test_tracking_disabled_no_middleware():
+    """Default settings — ContextTrackerMiddleware is NOT auto-registered."""
+    from moleculerpy.middleware.context_tracker import ContextTrackerMiddleware
+
+    broker = Broker(id="test-no-tracking")
+    assert not any(isinstance(mw, ContextTrackerMiddleware) for mw in broker.middlewares)
+
+
+def test_tracking_enabled_registers_middleware():
+    """settings.tracking.enabled=True auto-registers ContextTrackerMiddleware."""
+    from moleculerpy.middleware.context_tracker import ContextTrackerMiddleware
+    from moleculerpy.settings import TrackingConfig
+
+    settings = Settings(tracking=TrackingConfig(enabled=True, shutdown_timeout=2.5))
+    broker = Broker(id="test-tracking", settings=settings)
+
+    trackers = [mw for mw in broker.middlewares if isinstance(mw, ContextTrackerMiddleware)]
+    assert len(trackers) == 1
+    # Seconds (2.5) -> milliseconds (2500)
+    assert trackers[0]._default_timeout == 2500

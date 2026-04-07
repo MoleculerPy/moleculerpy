@@ -39,7 +39,7 @@ from .metrics import (
 )
 from .serializers import BaseSerializer, JsonSerializer, MsgPackSerializer, resolve_serializer
 from .service import Service
-from .settings import Settings, SettingsValidationError
+from .settings import Settings, SettingsValidationError, TrackingConfig
 from .stream import AsyncStream, StreamError
 from .tracing import (
     BaseTraceExporter,
@@ -65,6 +65,7 @@ __all__ = [  # noqa: RUF022
     "Lifecycle",
     "Settings",
     "SettingsValidationError",
+    "TrackingConfig",
     "NodeID",
     "ServiceName",
     "ActionName",

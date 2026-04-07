@@ -540,6 +540,24 @@ class Transit:
         node_info = self.node_catalog.local_node.get_info()
         await self.publish(Packet(Topic.INFO, None, node_info))
 
+    async def send_disconnect_info(self) -> None:
+        """Broadcast INFO packet with empty services list to drain connections.
+
+        Sent BEFORE DISCONNECT during graceful shutdown so peer nodes mark this
+        node as draining and stop routing new requests to it. Matches Node.js
+        Moleculer service-broker.js stop() pattern.
+        """
+        if not self._was_connected:
+            return
+        if self.node_catalog.local_node is None:
+            return
+        try:
+            info = self.node_catalog.local_node.get_info()
+            drain_info = {**info, "services": []}
+            await self.publish(Packet(Topic.INFO, None, drain_info))
+        except Exception as e:
+            self.logger.warning(f"Error sending disconnect INFO drain: {e}")
+
     async def _handle_discover(self, packet: Packet) -> None:
         """Handle discovery requests by sending node info.
 

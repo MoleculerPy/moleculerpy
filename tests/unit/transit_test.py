@@ -193,6 +193,51 @@ class TestTransit:
             assert packet.payload == {"id": "test-node", "services": []}
 
     @pytest.mark.asyncio
+    async def test_send_disconnect_info(self, mock_dependencies, mock_transporter):
+        """send_disconnect_info broadcasts INFO with empty services list."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+
+            # Not connected → no-op
+            transit._was_connected = False
+            await transit.send_disconnect_info()
+            mock_transporter.publish.assert_not_called()
+
+            # Connected, with local node
+            transit._was_connected = True
+            mock_node = MagicMock()
+            mock_node.get_info.return_value = {
+                "id": "test-node",
+                "services": [{"name": "math"}],
+                "client": {"type": "python"},
+            }
+            transit.node_catalog.local_node = mock_node
+
+            await transit.send_disconnect_info()
+
+            mock_transporter.publish.assert_called_once()
+            packet = mock_transporter.publish.call_args[0][0]
+            assert packet.type == Topic.INFO
+            assert packet.payload["services"] == []
+            assert packet.payload["id"] == "test-node"
+            assert packet.payload["client"] == {"type": "python"}
+
+    @pytest.mark.asyncio
+    async def test_send_disconnect_info_swallows_errors(self, mock_dependencies, mock_transporter):
+        """send_disconnect_info logs but doesn't raise on publish error."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            transit._was_connected = True
+            mock_node = MagicMock()
+            mock_node.get_info.return_value = {"id": "n", "services": []}
+            transit.node_catalog.local_node = mock_node
+            mock_transporter.publish.side_effect = RuntimeError("boom")
+
+            # Must not raise
+            await transit.send_disconnect_info()
+            transit.logger.warning.assert_called()
+
+    @pytest.mark.asyncio
     async def test_make_subscriptions(self, mock_dependencies, mock_transporter):
         """Test Transit _make_subscriptions method."""
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
