@@ -54,7 +54,7 @@ from .tracing import (
 try:
     __version__ = version("moleculerpy")
 except PackageNotFoundError:
-    __version__ = "0.14.19"
+    __version__ = "0.14.21"
 
 __all__ = [  # noqa: RUF022
     # Core

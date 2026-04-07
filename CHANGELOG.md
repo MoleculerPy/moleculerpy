@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.21] - 2026-04-07
+
+### Added
+- **Redis Cacher production-ready** — start()/stop() lifecycle, broker integration,
+  16 integration tests (get/set/delete/clean/TTL/keys/broker)
+- **seq/instanceID heartbeat checks** — detects remote node restart and service changes
+  via heartbeat (Node.js heartbeatReceived parity)
+
+### Fixed
+- **instanceID persistence** — process_node_info now saves instanceID from INFO packets
+  (was causing infinite re-discovery loop on every heartbeat)
+- **payload dict guard** — _handle_heartbeat validates payload is dict before access
+  (prevents crash on malformed packets)
+- **seq type coercion** — int comparison for cross-language safety
+- **instanceID=None guard** — skip comparison when node has no instanceID yet
+- **_discover_pending cleanup** — stale entries evicted in check_remote_nodes
+  (prevents unbounded memory growth)
+- **Redis cacher: logger fallback** — set in __init__ (was crashing if connect() before init())
+- **Redis cacher: prefix dedup** — removed duplicate namespace logic (BaseCacher handles it)
+- **Redis cacher: TTL validation** — negative/zero TTL warns and stores without expiry
+- **Redis cacher: ping loop** — pings first then sleeps (detects immediate connection drop)
+
 ## [0.14.19] - 2026-04-06
 
 ### Fixed (Audit-driven fixes for v0.14.18 serializers — PRD-019)
