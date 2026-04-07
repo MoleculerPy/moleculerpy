@@ -203,6 +203,13 @@ class Discoverer:
                 )
                 node_catalog.disconnect_node(node_id, unexpected=True)
 
+        # Evict stale entries from _discover_pending (prevents unbounded growth)
+        expired = [
+            k for k, ts in self._discover_pending.items() if now - ts > self._DISCOVER_COOLDOWN
+        ]
+        for k in expired:
+            self._discover_pending.pop(k, None)
+
     def check_offline_nodes(self) -> None:
         """Check offline nodes. Remove which are older than 10 minutes.
 

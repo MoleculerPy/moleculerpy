@@ -582,6 +582,8 @@ class Transit:
         """
         if not packet.sender or packet.sender == self.node_id:
             return  # Ignore own heartbeats (Node.js: sender === this.broker.nodeID)
+        if not isinstance(packet.payload, dict):
+            return  # Malformed heartbeat
 
         node = self.node_catalog.get_node(packet.sender)
         if node is None:
@@ -594,7 +596,7 @@ class Transit:
 
         # Check seq mismatch — services changed on remote node (Node.js parity)
         payload_seq = packet.payload.get("seq")
-        if payload_seq is not None and getattr(node, "seq", 0) != payload_seq:
+        if payload_seq is not None and int(getattr(node, "seq", 0)) != int(payload_seq):
             self.logger.debug(
                 f"Service seq changed on '{packet.sender}' "
                 f"({getattr(node, 'seq', 0)} → {payload_seq}), requesting INFO"
@@ -603,9 +605,10 @@ class Transit:
             return
 
         # Check instanceID mismatch — node restarted (Node.js parity)
+        # Skip if node has no instanceID yet (first registration, no INFO received)
         payload_iid = packet.payload.get("instanceID")
-        node_iid = getattr(node, "instanceID", None) or ""
-        if payload_iid is not None and not str(node_iid).startswith(str(payload_iid)):
+        node_iid = getattr(node, "instanceID", None)
+        if payload_iid is not None and node_iid and not str(node_iid).startswith(str(payload_iid)):
             self.logger.debug(
                 f"instanceID changed on '{packet.sender}' "
                 f"({node_iid} → {payload_iid}), requesting INFO"
