@@ -124,8 +124,11 @@ class RedisCacher(BaseCacher):
         # Default TTL in seconds
         self.default_ttl: int | None = self.opts.get("ttl")
 
-        # Serializer (initialized in init())
+        # Serializer
         self.serializer = JSONSerializer()
+
+        # Logger fallback (overridden in init() with broker logger)
+        self.logger = logger
 
         # Ping interval (optional periodic health check)
         self.ping_interval = self.opts.get("ping_interval")
@@ -139,16 +142,16 @@ class RedisCacher(BaseCacher):
         """
         super().init(broker)
 
+        # Redis is NOT connected until start() → connect() is called.
+        # BaseCacher.init() sets connected=True (fine for MemoryCacher), but
+        # for network cachers we override back to False until actual connection.
+        self.connected = False
+
         # Create logger (use broker's logger factory)
         if hasattr(broker, "_create_logger"):
             self.logger = broker._create_logger("REDIS-CACHER")
-        else:
-            self.logger = logger
 
-        # Add namespace to prefix if configured
-        if broker.namespace and broker.namespace != "":
-            self.prefix = f"MOL-{broker.namespace}-"
-
+        # Namespace prefix handled by BaseCacher.init() — no duplicate logic here.
         self.logger.info(f"Initializing Redis cacher with prefix '{self.prefix}'")
 
     async def connect(self) -> None:
@@ -228,24 +231,25 @@ class RedisCacher(BaseCacher):
                 self.connected = False
 
     async def _ping_loop(self) -> None:
-        """Periodic ping task for connection monitoring."""
+        """Periodic ping task for connection monitoring.
+
+        Pings first, then sleeps — detects immediate connection drop.
+        """
         try:
+            interval = self.ping_interval if isinstance(self.ping_interval, (int, float)) else 10.0
             while self.connected and self.client:
-                interval = (
-                    self.ping_interval if isinstance(self.ping_interval, (int, float)) else 0.0
-                )
-                await asyncio.sleep(interval)
                 try:
                     await self._await_maybe(self.client.ping())
                 except Exception as e:
-                    self.logger.warning(f"Ping failed: {e}")
+                    self.logger.error(f"Redis ping failed — connection may be broken: {e}")
                     self.connected = False
-                    # Broadcast error event
                     if self.broker:
                         await self.broker.broadcast_local(
                             "$cacher.error",
                             {"error": str(e), "module": "cacher", "type": "PING_FAILED"},
                         )
+                    break
+                await asyncio.sleep(interval)
         except asyncio.CancelledError:
             pass
 
@@ -329,21 +333,25 @@ class RedisCacher(BaseCacher):
 
         prefixed_key = self._get_prefixed_key(key)
 
-        # Use provided TTL or default
-        if ttl is None:
-            ttl = self.default_ttl
+        # Use provided TTL or default; validate
+        effective_ttl = ttl if ttl is not None else self.default_ttl
+        if effective_ttl is not None and effective_ttl <= 0:
+            self.logger.warning(
+                f"Invalid TTL {effective_ttl} for key {key}, storing without expiry"
+            )
+            effective_ttl = None
 
         try:
             # Serialize data
             serialized = self.serializer.serialize(data)
 
             # SET with optional TTL (atomic operation)
-            if ttl:
-                await self.client.set(prefixed_key, serialized, ex=ttl)
+            if effective_ttl is not None:
+                await self.client.set(prefixed_key, serialized, ex=effective_ttl)
             else:
                 await self.client.set(prefixed_key, serialized)
 
-            self.logger.debug(f"Cache SET: {key} (ttl={ttl}s)")
+            self.logger.debug(f"Cache SET: {key} (ttl={effective_ttl}s)")
 
         except Exception as e:
             self.logger.error(f"Redis SET error for {key}: {e}")
@@ -517,9 +525,22 @@ class RedisCacher(BaseCacher):
             self.logger.error(f"Redis GET_CACHE_KEYS error: {e}")
             return []
 
-    # Lock methods (TODO: Implement Redlock for distributed locking)
-    # For now, inherit from BaseCacher which provides in-memory lock fallback
+    async def start(self) -> None:
+        """Start cacher — connect to Redis.
+
+        Called by broker during broker.start(). Matches Node.js init() behavior
+        where connection is established during broker lifecycle.
+        """
+        await self.connect()
+
+    async def stop(self) -> None:
+        """Stop cacher — disconnect from Redis.
+
+        Called by broker during broker.stop().
+        """
+        await super().stop()  # Clears in-memory locks
+        await self.disconnect()
 
     async def close(self) -> None:
-        """Close Redis connection gracefully."""
+        """Close Redis connection gracefully (alias for disconnect)."""
         await self.disconnect()

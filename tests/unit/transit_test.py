@@ -1678,6 +1678,74 @@ class TestHeartbeatDiscovery:
             transit.discover_node.assert_not_awaited()
             transit.node_catalog.get_node.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_heartbeat_seq_mismatch_triggers_discover(
+        self, mock_dependencies, mock_transporter
+    ):
+        """Heartbeat with different seq triggers re-discovery (services changed)."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            mock_node = MagicMock()
+            mock_node.available = True
+            mock_node.seq = 5
+            mock_node.instanceID = "abc-123"
+            transit.node_catalog = MagicMock()
+            transit.node_catalog.get_node.return_value = mock_node
+            transit._request_discovery = AsyncMock()
+
+            packet = Packet(Topic.HEARTBEAT, "remote", {"cpu": 50, "seq": 10})
+            packet.sender = "remote"
+            await transit._handle_heartbeat(packet)
+
+            transit._request_discovery.assert_awaited_once_with("remote", "seq-changed")
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_instanceid_mismatch_triggers_discover(
+        self, mock_dependencies, mock_transporter
+    ):
+        """Heartbeat with different instanceID triggers re-discovery (node restarted)."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            mock_node = MagicMock()
+            mock_node.available = True
+            mock_node.seq = 5
+            mock_node.instanceID = "abc-123"
+            transit.node_catalog = MagicMock()
+            transit.node_catalog.get_node.return_value = mock_node
+            transit._request_discovery = AsyncMock()
+
+            packet = Packet(
+                Topic.HEARTBEAT, "remote", {"cpu": 50, "seq": 5, "instanceID": "xyz-999"}
+            )
+            packet.sender = "remote"
+            await transit._handle_heartbeat(packet)
+
+            transit._request_discovery.assert_awaited_once_with("remote", "instance-restarted")
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_same_seq_instanceid_updates_metrics(
+        self, mock_dependencies, mock_transporter
+    ):
+        """Heartbeat with matching seq/instanceID just updates metrics (no discovery)."""
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(**mock_dependencies)
+            mock_node = MagicMock()
+            mock_node.available = True
+            mock_node.seq = 5
+            mock_node.instanceID = "abc-123"
+            transit.node_catalog = MagicMock()
+            transit.node_catalog.get_node.return_value = mock_node
+            transit._request_discovery = AsyncMock()
+
+            packet = Packet(
+                Topic.HEARTBEAT, "remote", {"cpu": 80, "seq": 5, "instanceID": "abc-123"}
+            )
+            packet.sender = "remote"
+            await transit._handle_heartbeat(packet)
+
+            transit._request_discovery.assert_not_awaited()
+            assert mock_node.cpu == 80
+
 
 class TestRequestDiscovery:
     """Tests for _request_discovery rate-limiting and _handle_discover targeted reply."""

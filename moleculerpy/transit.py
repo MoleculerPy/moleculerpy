@@ -519,11 +519,16 @@ class Transit:
                 local_node.hostname = static["hostname"]
                 local_node.ipList = static["ip_list"]
 
-        heartbeat_data = {
+        heartbeat_data: dict[str, Any] = {
             "cpu": metrics["cpu"],
             "cpuSeq": metrics["cpuSeq"],
             "memory": metrics["memory"],  # Python extension
         }
+        # Include seq and instanceID so remote nodes can detect service changes
+        # and restarts via heartbeat (Node.js checks these in heartbeatReceived).
+        if local_node:
+            heartbeat_data["seq"] = local_node.seq
+            heartbeat_data["instanceID"] = local_node.instanceID
         await self.publish(Packet(Topic.HEARTBEAT, None, heartbeat_data))
 
     async def send_node_info(self) -> None:
@@ -577,6 +582,8 @@ class Transit:
         """
         if not packet.sender or packet.sender == self.node_id:
             return  # Ignore own heartbeats (Node.js: sender === this.broker.nodeID)
+        if not isinstance(packet.payload, dict):
+            return  # Malformed heartbeat
 
         node = self.node_catalog.get_node(packet.sender)
         if node is None:
@@ -585,6 +592,28 @@ class Transit:
 
         if not getattr(node, "available", True):
             await self._request_discovery(packet.sender, "offline")
+            return
+
+        # Check seq mismatch — services changed on remote node (Node.js parity)
+        payload_seq = packet.payload.get("seq")
+        if payload_seq is not None and int(getattr(node, "seq", 0)) != int(payload_seq):
+            self.logger.debug(
+                f"Service seq changed on '{packet.sender}' "
+                f"({getattr(node, 'seq', 0)} → {payload_seq}), requesting INFO"
+            )
+            await self._request_discovery(packet.sender, "seq-changed")
+            return
+
+        # Check instanceID mismatch — node restarted (Node.js parity)
+        # Skip if node has no instanceID yet (first registration, no INFO received)
+        payload_iid = packet.payload.get("instanceID")
+        node_iid = getattr(node, "instanceID", None)
+        if payload_iid is not None and node_iid and not str(node_iid).startswith(str(payload_iid)):
+            self.logger.debug(
+                f"instanceID changed on '{packet.sender}' "
+                f"({node_iid} → {payload_iid}), requesting INFO"
+            )
+            await self._request_discovery(packet.sender, "instance-restarted")
             return
 
         # Update Moleculer.js compatible metrics

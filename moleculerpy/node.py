@@ -415,6 +415,7 @@ class NodeCatalog:
         node.client = payload.get("client")
         node.metadata = payload.get("metadata", {})
         node.seq = payload.get("seq", 0)
+        node.instanceID = payload.get("instanceID", node.instanceID)
         node.port = payload.get("port", 0)
 
         # Phase 5.1: Update extended metrics
