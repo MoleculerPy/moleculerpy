@@ -27,6 +27,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Redis cacher: TTL validation** — negative/zero TTL warns and stores without expiry
 - **Redis cacher: ping loop** — pings first then sleeps (detects immediate connection drop)
 
+## [0.14.20] - 2026-04-06
+
+### Added
+- **Kafka 2-node discovery** — 6 root causes fixed: batch make_subscriptions, heartbeat-driven
+  discover_node, targeted DISCOVER/INFO, broadcast PING subscription (Node.js parity)
+- **checkRemoteNodes timer** — marks nodes unavailable after heartbeat_timeout (Node.js base.js)
+- **checkOfflineNodes timer** — removes nodes silent >10 minutes (Node.js base.js)
+- **Auto-reconnect** — Transit.connect() retries with 5s backoff on transporter failure
+- **Demo matrix** — 28-cell smoke test (7 transports × 4 serializers)
+- **Comprehensive test suite** — 90 integration tests: lifecycle, actions, events, discovery,
+  errors, versioning, ping, multi-service across all 7 transports
+
+### Changed
+- **DRY Template Method** — receive()/publish()/get_topic_name() moved to base Transporter
+  (~250 lines eliminated). Subclasses only override send/connect/disconnect/_is_connected.
+- **Transit SRP** — discovery logic extracted to Discoverer (discover_all, discover_node,
+  request_discovery, _discover_pending). Transit delegates to broker.discoverer.
+- **SubscriptionTopic TypedDict** — replaces dict[str, Any] for type safety
+- **Typed attributes** — LatencyMonitor|None, logging.Logger, asyncio.Task[None]
+
+### Fixed
+- **AMQP broadcast consumer** — wrapped in try/except to prevent silent crash on unknown cmd
+- **PROTOCOL_VERSION dedup** — single source of truth in base.py (was duplicated 4x)
+- **NATS _is_connected** — checks nc.is_connected property, not just reference existence
+- **Discoverer stop()** — guards on _started flag, not _tasks (fixes zero-interval config)
+
 ## [0.14.19] - 2026-04-06
 
 ### Fixed (Audit-driven fixes for v0.14.18 serializers — PRD-019)
