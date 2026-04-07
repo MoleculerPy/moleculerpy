@@ -51,6 +51,8 @@ class TestRedisCacherInit:
         cacher = RedisCacher(REDIS_URL)
         broker = MagicMock()
         broker.namespace = "myapp"
+        broker.settings = MagicMock()
+        broker.settings.namespace = "myapp"
         broker._create_logger = MagicMock(return_value=MagicMock())
         cacher.init(broker)
         assert cacher.prefix == "MOL-myapp-"
