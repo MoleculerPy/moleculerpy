@@ -48,8 +48,8 @@ MAX_JSON_DEPTH: Final[int] = 32
 MAX_NESTED_FIELD_BYTES: Final[int] = 1 * 1024 * 1024  # 1MB per nested field
 
 # Heuristic constant: HEARTBEAT packet field count.
-# Schema: ver, sender, cpu, seq, instanceID, memory, cpuSeq (+1 optional slack).
-_HEARTBEAT_MAX_FIELDS: Final[int] = 8
+# Schema: ver, sender, cpu (matches Node.js wire format exactly).
+_HEARTBEAT_MAX_FIELDS: Final[int] = 4
 
 
 def _check_json_depth(text: str, max_depth: int = MAX_JSON_DEPTH) -> bool:

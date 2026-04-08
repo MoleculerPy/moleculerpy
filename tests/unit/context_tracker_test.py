@@ -52,20 +52,20 @@ class TestContextTrackerMiddlewareInit:
         assert mw.logger is not None
         assert mw.logger.name == "moleculerpy.middleware.context_tracker"
         assert mw._broker is None
-        assert mw._default_timeout == 5000
-        assert mw._poll_interval == 100
+        assert mw._default_timeout == 5.0
+        assert mw._poll_interval == 0.1
 
     def test_init_custom_timeout(self):
         """Test middleware with custom timeout."""
-        mw = ContextTrackerMiddleware(shutdown_timeout=10000)
+        mw = ContextTrackerMiddleware(shutdown_timeout=10.0)
 
-        assert mw._default_timeout == 10000
+        assert mw._default_timeout == 10.0
 
     def test_init_custom_poll_interval(self):
         """Test middleware with custom poll interval."""
-        mw = ContextTrackerMiddleware(poll_interval=50)
+        mw = ContextTrackerMiddleware(poll_interval=0.05)
 
-        assert mw._poll_interval == 50
+        assert mw._poll_interval == 0.05
 
     def test_init_custom_logger(self):
         """Test middleware with custom logger."""
@@ -76,9 +76,9 @@ class TestContextTrackerMiddlewareInit:
 
     def test_repr(self):
         """Test __repr__ returns readable string."""
-        mw = ContextTrackerMiddleware(shutdown_timeout=3000)
+        mw = ContextTrackerMiddleware(shutdown_timeout=3.0)
 
-        assert repr(mw) == "ContextTrackerMiddleware(timeout=3000ms)"
+        assert repr(mw) == "ContextTrackerMiddleware(timeout=3.0s)"
 
 
 class TestTrackingConfiguration:
@@ -256,12 +256,12 @@ class TestWaitForContexts:
     @pytest.fixture
     def middleware(self):
         """Create middleware instance."""
-        return ContextTrackerMiddleware(poll_interval=10)
+        return ContextTrackerMiddleware(poll_interval=0.01)
 
     @pytest.mark.asyncio
     async def test_empty_list_returns_immediately(self, middleware):
         """Test empty list returns without waiting."""
-        await middleware._wait_for_contexts([], 1000)
+        await middleware._wait_for_contexts([], 1.0)
 
     @pytest.mark.asyncio
     async def test_list_clears_before_timeout(self, middleware):
@@ -273,7 +273,7 @@ class TestWaitForContexts:
             tracked.clear()
 
         task = asyncio.create_task(clear_list())
-        await middleware._wait_for_contexts(tracked, 1000)
+        await middleware._wait_for_contexts(tracked, 1.0)
         task.cancel()
 
     @pytest.mark.asyncio
@@ -282,7 +282,7 @@ class TestWaitForContexts:
         tracked = [MagicMock()]
 
         with pytest.raises(GracefulStopTimeoutError):
-            await middleware._wait_for_contexts(tracked, 50)
+            await middleware._wait_for_contexts(tracked, 0.05)
 
         # List should be cleared
         assert len(tracked) == 0
@@ -293,7 +293,7 @@ class TestWaitForContexts:
         tracked = [MagicMock()]
 
         with pytest.raises(GracefulStopTimeoutError) as exc_info:
-            await middleware._wait_for_contexts(tracked, 50, "users")
+            await middleware._wait_for_contexts(tracked, 0.05, "users")
 
         assert exc_info.value.service_name == "users"
 
@@ -336,11 +336,11 @@ class TestLifecycleHooks:
     @pytest.mark.asyncio
     async def test_service_stopping_waits(self):
         """Test service_stopping waits for contexts."""
-        mw = ContextTrackerMiddleware(poll_interval=10)
+        mw = ContextTrackerMiddleware(poll_interval=0.01)
         service = MagicMock()
         service.name = "users"
         service._tracked_contexts = [MagicMock()]
-        service.settings = {"$shutdown_timeout": 500}
+        service.settings = {"$shutdown_timeout": 0.5}
 
         async def clear_list():
             await asyncio.sleep(0.02)
@@ -353,11 +353,11 @@ class TestLifecycleHooks:
     @pytest.mark.asyncio
     async def test_service_stopping_custom_timeout(self):
         """Test service_stopping uses service-specific timeout."""
-        mw = ContextTrackerMiddleware(poll_interval=10, shutdown_timeout=10000)
+        mw = ContextTrackerMiddleware(poll_interval=0.01, shutdown_timeout=10.0)
         service = MagicMock()
         service.name = "users"
         service._tracked_contexts = [MagicMock()]
-        service.settings = {"$shutdown_timeout": 50}  # Very short timeout
+        service.settings = {"$shutdown_timeout": 0.05}  # Very short timeout
 
         # Should timeout quickly due to service-specific timeout
         await mw.service_stopping(service)
@@ -379,11 +379,11 @@ class TestLifecycleHooks:
     @pytest.mark.asyncio
     async def test_broker_stopping_waits(self):
         """Test broker_stopping waits for remote contexts."""
-        mw = ContextTrackerMiddleware(poll_interval=10)
+        mw = ContextTrackerMiddleware(poll_interval=0.01)
         broker = MagicMock()
         broker._tracked_contexts = [MagicMock()]
         broker.settings = MagicMock()
-        broker.settings.tracking = {"shutdown_timeout": 500}
+        broker.settings.tracking = {"shutdown_timeout": 0.5}
         mw._broker = broker
 
         async def clear_list():
@@ -582,13 +582,13 @@ class TestIntegrationPatterns:
     @pytest.mark.asyncio
     async def test_graceful_shutdown_pattern(self):
         """Test typical graceful shutdown flow."""
-        mw = ContextTrackerMiddleware(poll_interval=10, shutdown_timeout=500)
+        mw = ContextTrackerMiddleware(poll_interval=0.01, shutdown_timeout=0.5)
 
         # Setup broker
         broker = MagicMock()
         broker._tracked_contexts = []
         broker.settings = MagicMock()
-        broker.settings.tracking = {"enabled": True, "shutdown_timeout": 500}
+        broker.settings.tracking = {"enabled": True, "shutdown_timeout": 0.5}
         mw.broker_created(broker)
 
         # Setup service
@@ -628,7 +628,7 @@ class TestIntegrationPatterns:
     @pytest.mark.asyncio
     async def test_mixed_local_remote_tracking(self):
         """Test tracking both local and remote requests."""
-        mw = ContextTrackerMiddleware(poll_interval=10)
+        mw = ContextTrackerMiddleware(poll_interval=0.01)
 
         broker = MagicMock()
         broker._tracked_contexts = []

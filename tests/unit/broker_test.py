@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -382,5 +383,104 @@ def test_tracking_enabled_registers_middleware():
 
     trackers = [mw for mw in broker.middlewares if isinstance(mw, ContextTrackerMiddleware)]
     assert len(trackers) == 1
-    # Seconds (2.5) -> milliseconds (2500)
-    assert trackers[0]._default_timeout == 2500
+    # Seconds (no conversion)
+    assert trackers[0]._default_timeout == 2.5
+
+
+# ---------------------------------------------------------------------------
+# stopped alias: signature introspection (Node.js parity + legacy cleanup)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stopped_alias_with_broker_arg():
+    """Middleware with Node.js-style `stopped(broker)` receives broker arg."""
+    from moleculerpy.middleware.base import Middleware
+
+    captured: list[Any] = []
+
+    class NodeStyleMW(Middleware):
+        async def stopped(self, broker):  # type: ignore[override]
+            captured.append(broker)
+
+    broker = Broker(id="t-stopped-nodestyle")
+    broker.middlewares.append(NodeStyleMW())
+    await broker._execute_middleware_hooks("broker_stopped", broker)
+
+    assert captured == [broker]
+
+
+@pytest.mark.asyncio
+async def test_stopped_alias_legacy_no_args():
+    """Legacy middleware with `stopped(self)` is still called without broker."""
+    from moleculerpy.middleware.base import Middleware
+
+    calls: list[str] = []
+
+    class LegacyMW(Middleware):
+        async def stopped(self) -> None:  # 0-arg cleanup, legacy signature
+            calls.append("cleanup")
+
+    broker = Broker(id="t-stopped-legacy")
+    broker.middlewares.append(LegacyMW())
+    await broker._execute_middleware_hooks("broker_stopped", broker)
+
+    assert calls == ["cleanup"]
+
+
+@pytest.mark.asyncio
+async def test_stopped_alias_skipped_when_no_override():
+    """Default base Middleware.stopped() is NOT invoked via alias path."""
+    from moleculerpy.middleware.base import Middleware
+
+    mw = Middleware()  # no override
+    broker = Broker(id="t-stopped-base")
+    broker.middlewares.append(mw)
+    # Should not raise; base no-op stopped() not invoked via alias path.
+    await broker._execute_middleware_hooks("broker_stopped", broker)
+
+
+@pytest.mark.asyncio
+async def test_register_increments_local_seq(broker, mock_transit, mock_node_catalog):
+    """register() must bump local_node.seq so remote nodes notice the change."""
+    local_node = Mock()
+    local_node.seq = 1
+    mock_transit.node_catalog = Mock()
+    mock_transit.node_catalog.local_node = local_node
+    mock_transit._was_connected = False
+
+    await broker.register(TestService())
+
+    assert local_node.seq == 2
+
+
+@pytest.mark.asyncio
+async def test_register_broadcasts_info_when_connected(broker, mock_transit, mock_node_catalog):
+    """When transit is already connected, register() must broadcast INFO."""
+    local_node = Mock()
+    local_node.seq = 5
+    mock_transit.node_catalog = Mock()
+    mock_transit.node_catalog.local_node = local_node
+    mock_transit._was_connected = True
+    mock_transit.send_node_info = AsyncMock()
+
+    await broker.register(TestService())
+
+    assert local_node.seq == 6
+    mock_transit.send_node_info.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_register_no_broadcast_when_not_connected(broker, mock_transit, mock_node_catalog):
+    """During broker.start(), transit isn't connected yet — no INFO broadcast."""
+    local_node = Mock()
+    local_node.seq = 0
+    mock_transit.node_catalog = Mock()
+    mock_transit.node_catalog.local_node = local_node
+    mock_transit._was_connected = False
+    mock_transit.send_node_info = AsyncMock()
+
+    await broker.register(TestService())
+
+    assert local_node.seq == 1
+    mock_transit.send_node_info.assert_not_called()

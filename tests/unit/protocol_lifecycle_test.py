@@ -155,36 +155,36 @@ def _protobuf_serializer():
     return ProtoBufSerializer()
 
 
-def test_heartbeat_protobuf_roundtrip_with_seq() -> None:
+def test_heartbeat_protobuf_roundtrip_nodejs_parity() -> None:
+    # PacketHeartbeat schema matches Node.js exactly: only ver/sender/cpu.
+    # See ADR-heartbeat-schema.md "Revert decision".
     serializer = _protobuf_serializer()
-    payload = {
-        "ver": "4",
-        "sender": "node-A",
-        "cpu": 12.5,
-        "seq": 42,
-    }
+    payload = {"ver": "4", "sender": "node-A", "cpu": 12.5}
     raw = serializer.serialize(payload, "HEARTBEAT")
     decoded = serializer.deserialize(raw, "HEARTBEAT")
-    assert decoded.get("seq") == 42
     assert decoded.get("sender") == "node-A"
+    assert decoded.get("cpu") == 12.5
+    assert decoded.get("ver") == "4"
 
 
-def test_heartbeat_protobuf_roundtrip_with_instanceid() -> None:
+def test_heartbeat_protobuf_drops_extra_fields() -> None:
+    # Extra payload keys (legacy seq/instanceID/memory/cpuSeq) must be silently
+    # dropped — field numbers 4-7 are reserved in packets.proto.
     serializer = _protobuf_serializer()
     payload = {
         "ver": "4",
         "sender": "node-A",
         "cpu": 7.0,
+        "seq": 42,
         "instanceID": "abc-123-instance",
         "memory": 33.3,
         "cpuSeq": 9,
     }
     raw = serializer.serialize(payload, "HEARTBEAT")
     decoded = serializer.deserialize(raw, "HEARTBEAT")
-    assert decoded.get("instanceID") == "abc-123-instance"
-    assert decoded.get("cpuSeq") == 9
-    # memory is a double in proto schema
-    assert decoded.get("memory") == pytest.approx(33.3, rel=1e-3)
+    assert decoded.get("cpu") == 7.0
+    for dropped in ("seq", "instanceID", "memory", "cpuSeq"):
+        assert dropped not in decoded
 
 
 def test_heartbeat_json_still_works() -> None:

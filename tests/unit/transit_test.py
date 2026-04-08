@@ -140,10 +140,7 @@ class TestTransit:
     async def test_beat(self, mock_dependencies, mock_transporter):
         """Test Transit beat method.
 
-        Phase 5.1: Updated to test Moleculer.js compatible HEARTBEAT format:
-        - cpu: int (0-100, rounded)
-        - cpuSeq: int (increments when CPU changes)
-        - memory: float (Python extension)
+        Node.js compatible HEARTBEAT payload: {cpu} only.
         """
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
             with patch("psutil.cpu_percent", return_value=25.5):
@@ -161,13 +158,8 @@ class TestTransit:
                     mock_transporter.publish.assert_called_once()
                     packet = mock_transporter.publish.call_args[0][0]
                     assert packet.type == Topic.HEARTBEAT
-                    # CPU is now rounded to int like Moleculer.js
-                    assert packet.payload["cpu"] == 26  # round(25.5) = 26
-                    # Phase 5.1: cpuSeq and memory added
-                    assert "cpuSeq" in packet.payload
-                    assert packet.payload["cpuSeq"] == 1  # First call, first increment
-                    assert "memory" in packet.payload
-                    assert packet.payload["memory"] == 45.0
+                    # CPU is rounded to int like Moleculer.js
+                    assert packet.payload == {"cpu": 26}
 
     @pytest.mark.asyncio
     async def test_send_node_info(self, mock_dependencies, mock_transporter):

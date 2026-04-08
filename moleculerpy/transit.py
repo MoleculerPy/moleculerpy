@@ -493,12 +493,9 @@ class Transit:
     async def beat(self) -> None:
         """Send a heartbeat with current node metrics.
 
-        Moleculer.js compatible:
-        - cpu: CPU usage percentage (0-100, int)
-        - cpuSeq: Sequence number that increments when CPU changes
-
-        Python extensions:
-        - memory: Memory usage percentage
+        Node.js compatible payload: {cpu} only.
+        Local node state (cpu, cpuSeq, memory, lastHeartbeatTime) is still
+        updated for local metrics/discovery, but not transmitted on the wire.
         """
         # Collect metrics using MetricsCollector (handles cpuSeq tracking)
         metrics = await self._metrics_collector.collect()
@@ -519,16 +516,8 @@ class Transit:
                 local_node.hostname = static["hostname"]
                 local_node.ipList = static["ip_list"]
 
-        heartbeat_data: dict[str, Any] = {
-            "cpu": metrics["cpu"],
-            "cpuSeq": metrics["cpuSeq"],
-            "memory": metrics["memory"],  # Python extension
-        }
-        # Include seq and instanceID so remote nodes can detect service changes
-        # and restarts via heartbeat (Node.js checks these in heartbeatReceived).
-        if local_node:
-            heartbeat_data["seq"] = local_node.seq
-            heartbeat_data["instanceID"] = local_node.instanceID
+        # Node.js compatible: heartbeat payload contains only {cpu}.
+        heartbeat_data: dict[str, Any] = {"cpu": metrics["cpu"]}
         await self.publish(Packet(Topic.HEARTBEAT, None, heartbeat_data))
 
     async def send_node_info(self) -> None:

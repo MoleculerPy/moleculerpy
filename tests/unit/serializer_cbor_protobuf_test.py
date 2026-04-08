@@ -197,9 +197,12 @@ class TestProtoBufSerializer:
         result = serializer.deserialize(data, packet_type="HEARTBEAT")
         assert result["cpu"] == 75
 
-    def test_roundtrip_heartbeat_extended_fields(self, serializer: ProtoBufSerializer) -> None:
-        # Verifies seq/instanceID/memory/cpuSeq survive proto roundtrip.
-        # These fields back the heartbeat-driven restart detection feature.
+    def test_heartbeat_extra_fields_dropped_for_nodejs_parity(
+        self, serializer: ProtoBufSerializer
+    ) -> None:
+        # PacketHeartbeat wire format matches Node.js exactly: only ver/sender/cpu.
+        # Field numbers 4-7 are reserved (formerly seq/instanceID/memory/cpuSeq).
+        # Extra keys in payload must be silently dropped during serialization.
         payload = {
             "ver": "4",
             "sender": "node-1",
@@ -211,11 +214,10 @@ class TestProtoBufSerializer:
         }
         data = serializer.serialize(payload, packet_type="HEARTBEAT")
         result = serializer.deserialize(data, packet_type="HEARTBEAT")
-        assert result["seq"] == 42
-        assert result["instanceID"] == "abc-123-instance"
-        assert result["memory"] == 1024.75
-        assert result["cpuSeq"] == 7
         assert result["cpu"] == 50.5
+        assert result["sender"] == "node-1"
+        for dropped in ("seq", "instanceID", "memory", "cpuSeq"):
+            assert dropped not in result
 
     def test_roundtrip_ping_pong(self, serializer: ProtoBufSerializer) -> None:
         ping = {"ver": "4", "sender": "n1", "time": 1234567890, "id": "ping-1"}

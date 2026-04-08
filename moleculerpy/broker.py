@@ -6,6 +6,7 @@ communication, and lifecycle management.
 """
 
 import asyncio
+import inspect
 import signal
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -142,10 +143,9 @@ class ServiceBroker:
         if tracking_cfg is not None and getattr(tracking_cfg, "enabled", False):
             from .middleware.context_tracker import ContextTrackerMiddleware  # noqa: PLC0415
 
-            # TrackingConfig.shutdown_timeout is float seconds;
-            # ContextTrackerMiddleware expects int milliseconds.
-            shutdown_timeout_ms = int(tracking_cfg.shutdown_timeout * 1000)
-            self.middlewares.append(ContextTrackerMiddleware(shutdown_timeout=shutdown_timeout_ms))
+            self.middlewares.append(
+                ContextTrackerMiddleware(shutdown_timeout=tracking_cfg.shutdown_timeout)
+            )
 
         # Wrapped event methods (set during start() by middleware)
         self._wrapped_emit: (
@@ -277,15 +277,17 @@ class ServiceBroker:
         # Node.js Moleculer uses short hook names (starting/started/stopping/stopped)
         # while MoleculerPy historically used broker_* names. To maintain backward
         # compatibility AND Node.js ecosystem compatibility, we invoke both names.
-        # Note: "stopped" is intentionally NOT aliased because MoleculerPy's existing
-        # stopped() hook takes no arguments (middleware self-cleanup), which would
-        # collide with Node.js stopped(broker) signature.
+        # Special case for "stopped": base Middleware.stopped() is a no-arg
+        # self-cleanup hook (legacy), but Node.js-style stopped(broker) takes the
+        # broker. We use signature introspection to support both: if subclass
+        # override accepts >=1 parameter, call with broker; otherwise call no-arg.
         from .middleware.base import Middleware as _BaseMiddleware  # noqa: PLC0415
 
         _broker_hook_aliases = {
             "broker_starting": "starting",
             "broker_started": "started",
             "broker_stopping": "stopping",
+            "broker_stopped": "stopped",
         }
         alias = _broker_hook_aliases.get(hook_name)
 
@@ -295,29 +297,42 @@ class ServiceBroker:
             base_method = getattr(_BaseMiddleware, name, None)
             return mw_method is not None and mw_method is not base_method
 
+        def _alias_args(mw: Any, name: str) -> tuple[Any, ...]:
+            """Return args to pass to the alias based on its signature.
+
+            Node.js-style hooks accept broker; legacy Middleware.stopped() takes
+            no args. Introspect the bound method's parameters to choose.
+            """
+            method = getattr(mw, name)
+            try:
+                params = list(inspect.signature(method).parameters.values())
+            except (TypeError, ValueError):
+                return args
+            return args if len(params) >= 1 else ()
+
         if is_async:
             coroutines = []
             for middleware in self.middlewares:
-                names = [hook_name]
+                pairs: list[tuple[str, tuple[Any, ...]]] = [(hook_name, args)]
                 if alias and _is_overridden(middleware, alias):
-                    names.append(alias)
-                for name in names:
+                    pairs.append((alias, _alias_args(middleware, alias)))
+                for name, call_args in pairs:
                     hook = getattr(middleware, name, None)
                     if hook and callable(hook):
-                        result = hook(*args)
+                        result = hook(*call_args)
                         if asyncio.iscoroutine(result):
                             coroutines.append(result)
             return coroutines if coroutines else None
         else:
             # Synchronous hooks
             for middleware in self.middlewares:
-                names = [hook_name]
+                pairs = [(hook_name, args)]
                 if alias and _is_overridden(middleware, alias):
-                    names.append(alias)
-                for name in names:
+                    pairs.append((alias, _alias_args(middleware, alias)))
+                for name, call_args in pairs:
                     hook = getattr(middleware, name, None)
                     if hook and callable(hook):
-                        hook(*args)
+                        hook(*call_args)
             return None
 
     async def _execute_middleware_hooks(
@@ -750,6 +765,24 @@ class ServiceBroker:
         # Register with registry and update local node
         self.registry.register(service)
         self.node_catalog.ensure_local_node()
+
+        # Node.js parity: increment seq + broadcast INFO so remote nodes
+        # detect new services immediately (matches registry.js
+        # localNodeInfoInvalidated="seq" → sendLocalNodeInfo).
+        transit_catalog = getattr(self.transit, "node_catalog", None) if self.transit else None
+        transit_local_node = (
+            getattr(transit_catalog, "local_node", None) if transit_catalog else None
+        )
+        if transit_local_node is not None:
+            transit_local_node.seq += 1
+            # Only broadcast if transit is already connected. During
+            # broker.start(), services register before transit connects;
+            # in that case the initial INFO broadcast will carry the new seq.
+            if getattr(self.transit, "_was_connected", False):
+                try:
+                    await self.transit.send_node_info()
+                except Exception as e:
+                    self.logger.warning(f"Failed to broadcast INFO after service register: {e}")
 
         # Wrap action handlers with middleware (Moleculer pattern)
         # This ensures middleware is applied even for direct service.action() calls

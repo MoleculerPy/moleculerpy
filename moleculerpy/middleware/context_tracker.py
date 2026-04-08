@@ -19,7 +19,7 @@ Example usage:
         middlewares=[ContextTrackerMiddleware()],
         tracking={
             "enabled": True,
-            "shutdown_timeout": 5000,  # ms
+            "shutdown_timeout": 5.0,  # seconds
         },
     )
 
@@ -108,8 +108,8 @@ class ContextTrackerMiddleware(Middleware):
     Attributes:
         logger: Logger for tracking events
         _broker: Reference to the broker instance
-        _default_timeout: Default shutdown timeout in milliseconds
-        _poll_interval: Polling interval for shutdown check (ms)
+        _default_timeout: Default shutdown timeout in seconds
+        _poll_interval: Polling interval for shutdown check (seconds)
     """
 
     __slots__ = (
@@ -123,15 +123,15 @@ class ContextTrackerMiddleware(Middleware):
 
     def __init__(
         self,
-        shutdown_timeout: int = 5000,
-        poll_interval: int = 100,
+        shutdown_timeout: float = 5.0,
+        poll_interval: float = 0.1,
         logger: logging.Logger | None = None,
     ) -> None:
         """Initialize the ContextTrackerMiddleware.
 
         Args:
-            shutdown_timeout: Default shutdown timeout in milliseconds
-            poll_interval: Polling interval for shutdown check (ms)
+            shutdown_timeout: Default shutdown timeout in seconds
+            poll_interval: Polling interval for shutdown check (seconds)
             logger: Optional logger for tracking events
         """
         super().__init__()
@@ -144,7 +144,7 @@ class ContextTrackerMiddleware(Middleware):
 
     def __repr__(self) -> str:
         """Return string representation for debugging."""
-        return f"ContextTrackerMiddleware(timeout={self._default_timeout}ms)"
+        return f"ContextTrackerMiddleware(timeout={self._default_timeout}s)"
 
     def _is_tracking_enabled(self) -> bool:
         """Check if tracking is enabled in broker settings.
@@ -259,7 +259,7 @@ class ContextTrackerMiddleware(Middleware):
     async def _wait_for_contexts(
         self,
         tracked_list: list[Context],
-        timeout_ms: int,
+        timeout_sec: float,
         service_name: str | None = None,
     ) -> None:
         """Wait for all tracked contexts to complete.
@@ -268,7 +268,7 @@ class ContextTrackerMiddleware(Middleware):
 
         Args:
             tracked_list: List of tracked contexts
-            timeout_ms: Timeout in milliseconds
+            timeout_sec: Timeout in seconds
             service_name: Service name for error reporting
 
         Raises:
@@ -277,8 +277,7 @@ class ContextTrackerMiddleware(Middleware):
         if not tracked_list:
             return
 
-        timeout_sec = timeout_ms / 1000.0
-        poll_sec = self._poll_interval / 1000.0
+        poll_sec = self._poll_interval
         elapsed = 0.0
 
         while tracked_list:
@@ -336,7 +335,7 @@ class ContextTrackerMiddleware(Middleware):
 
         self.logger.info(
             f"Waiting for {len(tracked)} active request(s) "
-            f"in service '{service.name}' (timeout: {timeout}ms)"
+            f"in service '{service.name}' (timeout: {timeout}s)"
         )
 
         try:
@@ -368,7 +367,7 @@ class ContextTrackerMiddleware(Middleware):
             timeout = self._default_timeout
 
         self.logger.info(
-            f"Waiting for {len(tracked)} active remote request(s) (timeout: {timeout}ms)"
+            f"Waiting for {len(tracked)} active remote request(s) (timeout: {timeout}s)"
         )
 
         try:
