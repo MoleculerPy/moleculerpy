@@ -37,6 +37,13 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Tmp marker files written by tests/integration/node_services/crosslang_test.service.js.
+# Unique per run (pid + timestamp) to avoid stale data across runs.
+_RUN_TAG = f"{os.getpid()}_{int(time.time())}"
+T3_LOG = Path(f"/tmp/crosslang_test_T3_{_RUN_TAG}.log")
+T4_LOG = Path(f"/tmp/crosslang_test_T4_{_RUN_TAG}.log")
+T5_LOG = Path(f"/tmp/crosslang_test_T5_{_RUN_TAG}.log")
+
 from moleculerpy import Service, ServiceBroker, Settings, action, event
 
 # Node.js broker startup settle time
@@ -137,6 +144,9 @@ class NodeBrokerProcess:
         """Start the Node.js broker and wait for it to be ready."""
         env = os.environ.copy()
         env["MOLECULER_LOG_LEVEL"] = "warn"
+        env["CROSSLANG_T3_LOG"] = str(T3_LOG)
+        env["CROSSLANG_T4_LOG"] = str(T4_LOG)
+        env["CROSSLANG_T5_LOG"] = str(T5_LOG)
         self.proc = subprocess.Popen(
             ["node", str(NODE_INDEX)],
             cwd=str(NODE_SERVICES_DIR),
@@ -236,8 +246,9 @@ class Report:
             status = f"{GREEN}PASS{NC}" if r.passed else f"{RED}FAIL{NC}"
             dur = f"{r.duration:.2f}s" if r.duration > 0 else ""
             print(f"  {status}  {r.name:40s} {dur}")
-            if not r.passed and r.detail:
-                print(f"        {RED}{r.detail}{NC}")
+            if r.detail:
+                color = RED if not r.passed else YELLOW
+                print(f"        {color}{r.detail}{NC}")
         print(
             f"\n{BOLD}Total:{NC} {len(self.results)}  "
             f"{GREEN}Passed:{NC} {passed}  "
@@ -253,6 +264,14 @@ class Report:
 
 async def run_tests(report: Report) -> None:
     """Run cross-language test scenarios."""
+    # Cleanup any stale marker files from previous runs (should never match
+    # our _RUN_TAG, but be defensive).
+    for p in (T3_LOG, T4_LOG, T5_LOG):
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+
     # Start Node.js broker
     print(f"\n{BOLD}[1/2]{NC} Starting Node.js Moleculer broker...")
     node_proc = NodeBrokerProcess()
@@ -303,7 +322,7 @@ async def run_tests(report: Report) -> None:
                 py_broker.call("math.add", {"a": 10, "b": 32}),
                 timeout=5.0,
             )
-            if result == 42:  # noqa: PLR2004
+            if result == 42:
                 report.add("T2 Python → Node math.add", True, time.perf_counter() - t0)
             else:
                 report.add(
@@ -315,39 +334,135 @@ async def run_tests(report: Report) -> None:
         except Exception as e:
             report.add("T2 Python → Node math.add", False, time.perf_counter() - t0, str(e))
 
-        # T3: Node.js → Python RPC call (requires node_services to call python-greeter)
-        # Since the existing Node services don't call Python, we verify via
-        # event propagation (T4 below) which proves bidirectional wire compat.
-        # A future improvement: add a Node test action that calls python-greeter.hello.
-
-        # T4: Bidirectional event propagation
+        # T3: Node.js → Python RPC call.
+        # Python calls crosslang_test.verify_python_call on Node.js; Node then
+        # calls back python-greeter.hello and writes the result to T3_LOG.
         t0 = time.perf_counter()
         try:
-            await py_broker.emit("cross.lang.ping", {"from": "python", "n": 1})
-            # Node side will log it; we can't easily verify from here without
-            # adding an event handler on Node side that writes to a file/stdout.
-            # For now we just verify emit doesn't raise (real assertion needs
-            # Node-side event handler feedback channel).
-            await asyncio.sleep(0.5)
-            report.add("T4 Python emits cross-lang event", True, time.perf_counter() - t0)
+            await py_broker.wait_for_services(["crosslang_test"], timeout=10.0, interval=0.3)
+            resp = await asyncio.wait_for(
+                py_broker.call("crosslang_test.verify_python_call", {"name": "Cross"}),
+                timeout=5.0,
+            )
+            # Give Node a moment to flush the file append.
+            await asyncio.sleep(0.2)
+            log_content = T3_LOG.read_text() if T3_LOG.exists() else ""
+            if (
+                isinstance(resp, dict)
+                and resp.get("ok") is True
+                and "Hello Cross from Python!" in log_content
+            ):
+                report.add("T3 Node → Python RPC", True, time.perf_counter() - t0)
+            else:
+                report.add(
+                    "T3 Node → Python RPC",
+                    False,
+                    time.perf_counter() - t0,
+                    f"resp={resp!r} log={log_content!r}",
+                )
+        except Exception as e:
+            report.add("T3 Node → Python RPC", False, time.perf_counter() - t0, str(e))
+
+        # T4: Bidirectional event propagation.
+        # Python emits; Node's event handler writes the payload to T4_LOG.
+        t0 = time.perf_counter()
+        try:
+            marker = f"run-{_RUN_TAG}"
+            # Use broadcast so every subscriber (Python collector + Node
+            # crosslang_test service) receives it regardless of group balancing.
+            await py_broker.broadcast("cross.lang.ping", {"from": "python", "marker": marker})
+            # Poll the file for up to 2s. We assert the handler actually
+            # fired on Node (presence of a "PING " line) as real proof of
+            # cross-language event delivery on the wire.
+            # Payload propagation note: MoleculerPy currently ships event
+            # payload in the `params` field of the EVENT packet, while
+            # Moleculer.js v0.14 reads from `data`. So delivery is verified,
+            # but ctx.params is empty on the Node side until that is fixed.
+            deadline = time.perf_counter() + 2.0
+            log_content = ""
+            fired = False
+            while time.perf_counter() < deadline:
+                if T4_LOG.exists():
+                    log_content = T4_LOG.read_text()
+                    if "PING " in log_content:
+                        fired = True
+                        break
+                await asyncio.sleep(0.1)
+            if fired:
+                detail = (
+                    ""
+                    if marker in log_content
+                    else "(handler fired; payload empty — EVENT params/data gap)"
+                )
+                report.add(
+                    "T4 Python → Node event delivery",
+                    True,
+                    time.perf_counter() - t0,
+                    detail,
+                )
+            else:
+                report.add(
+                    "T4 Python → Node event delivery",
+                    False,
+                    time.perf_counter() - t0,
+                    f"handler never fired; log={log_content!r}",
+                )
         except Exception as e:
             report.add(
-                "T4 Python emits cross-lang event",
+                "T4 Python → Node event delivery",
                 False,
                 time.perf_counter() - t0,
                 str(e),
             )
 
-        # T5: Graceful shutdown drain — Python stops, Node should drop endpoints
+        # T5: Graceful shutdown drain — Python stops, Node should observe
+        # INFO(services=[]) or DISCONNECT for py-crosslang in T5_LOG.
         t0 = time.perf_counter()
+        py_broker_stopped = False
         try:
             await asyncio.wait_for(py_broker.stop(), timeout=5.0)
-            report.add("T5 Python graceful stop", True, time.perf_counter() - t0)
-            # Mark broker as None so finally block skips second stop
             py_broker_stopped = True
+            # Give Node time to process the drain + disconnect.
+            deadline = time.perf_counter() + 3.0
+            observed = False
+            log_content = ""
+            while time.perf_counter() < deadline:
+                if T5_LOG.exists():
+                    log_content = T5_LOG.read_text()
+                    # Look for either an INFO with empty services for our node,
+                    # or a DISCONNECT for py-crosslang.
+                    for line in log_content.splitlines():
+                        if "py-crosslang" not in line:
+                            continue
+                        if line.startswith("INFO ") and '"services":[]' in line.replace(" ", ""):
+                            observed = True
+                            break
+                        if line.startswith("DISCONNECT "):
+                            observed = True
+                            break
+                    if observed:
+                        break
+                await asyncio.sleep(0.1)
+            if observed:
+                report.add(
+                    "T5 Python graceful stop observed by Node",
+                    True,
+                    time.perf_counter() - t0,
+                )
+            else:
+                report.add(
+                    "T5 Python graceful stop observed by Node",
+                    False,
+                    time.perf_counter() - t0,
+                    f"no drain/disconnect in {log_content!r}",
+                )
         except Exception as e:
-            report.add("T5 Python graceful stop", False, time.perf_counter() - t0, str(e))
-            py_broker_stopped = False
+            report.add(
+                "T5 Python graceful stop observed by Node",
+                False,
+                time.perf_counter() - t0,
+                str(e),
+            )
 
     finally:
         if not locals().get("py_broker_stopped", True):

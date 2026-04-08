@@ -131,7 +131,7 @@ async def _test_single_node(serializer: str, transport: Transport) -> tuple[bool
 
     try:
         result = await asyncio.wait_for(broker.call("math.add", {"a": 3, "b": 4}), timeout=3.0)
-        local_ok = result == 7  # noqa: PLR2004
+        local_ok = result == 7
 
         complex_result = await asyncio.wait_for(
             broker.call(
@@ -142,7 +142,7 @@ async def _test_single_node(serializer: str, transport: Transport) -> tuple[bool
         )
         complex_ok = (
             isinstance(complex_result, dict)
-            and complex_result.get("result") == 42  # noqa: PLR2004
+            and complex_result.get("result") == 42
             and complex_result.get("meta", {}).get("processed") is True
         )
 
@@ -222,7 +222,7 @@ async def _test_two_nodes(serializer: str, transport: Transport) -> tuple[bool, 
             broker_a.call("math.add", {"a": 100, "b": 200}),
             timeout=5.0,
         )
-        remote_ok = result == 300  # noqa: PLR2004
+        remote_ok = result == 300
     except Exception as e:
         err = f"remote-call: {type(e).__name__}: {e}"
     finally:

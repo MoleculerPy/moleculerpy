@@ -23,6 +23,7 @@ const broker = new ServiceBroker({
 // Load services
 broker.loadService(__dirname + "/math.service.js");
 broker.loadService(__dirname + "/greeter.service.js");
+broker.loadService(__dirname + "/crosslang_test.service.js");
 
 // Start broker
 broker.start()

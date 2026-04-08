@@ -169,7 +169,7 @@ def _is_port_open(host: str, port: int) -> bool:
 def _make_urls(transport: Transport, suffix_a: str, suffix_b: str) -> tuple[str, str]:
     """Generate transport URLs for a 2-node test pair."""
     if transport.name == "tcp":
-        import hashlib  # noqa: PLC0415
+        import hashlib
 
         h = int(hashlib.md5(suffix_a.encode()).hexdigest()[:4], 16) % 200
         pa, pb = 31000 + h, 31000 + h + 1
@@ -237,7 +237,7 @@ async def t1_lifecycle(transport: Transport) -> list[TestResult]:
         await broker.register(MathService())
         await asyncio.wait_for(broker.start(), timeout=10.0)
         r = await asyncio.wait_for(broker.call("math.add", {"a": 1, "b": 2}), timeout=3.0)
-        assert r == 3, f"Expected 3, got {r}"  # noqa: PLR2004
+        assert r == 3, f"Expected 3, got {r}"
         await asyncio.wait_for(broker.stop(), timeout=5.0)
         results.append(TestResult("start-stop", True, time.perf_counter() - t0))
     except Exception as e:
@@ -264,7 +264,7 @@ async def t2_actions(transport: Transport) -> list[TestResult]:
             await asyncio.wait_for(broker.start(), timeout=10.0)
 
             r = await asyncio.wait_for(broker.call("math.add", {"a": 5, "b": 3}), timeout=3.0)
-            assert r == 8, f"Expected 8, got {r}"  # noqa: PLR2004
+            assert r == 8, f"Expected 8, got {r}"
             results.append(TestResult("local-call", True, time.perf_counter() - t0))
 
             await asyncio.wait_for(broker.stop(), timeout=5.0)
@@ -283,7 +283,7 @@ async def t2_actions(transport: Transport) -> list[TestResult]:
         # T2.1: Remote call
         t0 = time.perf_counter()
         r = await asyncio.wait_for(a.call("math.add", {"a": 10, "b": 20}), timeout=5.0)
-        assert r == 30, f"Expected 30, got {r}"  # noqa: PLR2004
+        assert r == 30, f"Expected 30, got {r}"
         results.append(TestResult("remote-call", True, time.perf_counter() - t0))
 
         # T2.2: Cross-service call (greeter calls math)
@@ -303,7 +303,7 @@ async def t2_actions(transport: Transport) -> list[TestResult]:
             ),
             timeout=5.0,
         )
-        assert multi[0] == 3 and "MoleculerPy" in str(multi[1])  # noqa: PLR2004
+        assert multi[0] == 3 and "MoleculerPy" in str(multi[1])
         results.append(TestResult("mcall", True, time.perf_counter() - t0))
 
     except Exception as e:
@@ -466,8 +466,8 @@ async def t6_versioning(transport: Transport) -> list[TestResult]:
         # Call v2
         r2 = await asyncio.wait_for(broker.call("v2.math.add", {"a": 2, "b": 3}), timeout=3.0)
 
-        assert r1 == 5, f"v1 expected 5, got {r1}"  # noqa: PLR2004
-        assert r2 == 50, f"v2 expected 50, got {r2}"  # noqa: PLR2004
+        assert r1 == 5, f"v1 expected 5, got {r1}"
+        assert r2 == 50, f"v2 expected 50, got {r2}"
         results.append(TestResult("versioned-calls", True, time.perf_counter() - t0))
 
         await asyncio.wait_for(broker.stop(), timeout=5.0)
@@ -529,7 +529,7 @@ async def t8_multi_service(transport: Transport) -> list[TestResult]:
         # T8.1: A calls math on B
         t0 = time.perf_counter()
         r = await asyncio.wait_for(a.call("math.add", {"a": 100, "b": 200}), timeout=5.0)
-        assert r == 300  # noqa: PLR2004
+        assert r == 300
         results.append(TestResult("cross-node-call", True, time.perf_counter() - t0))
 
         # T8.2: B calls greeter on A

@@ -126,6 +126,49 @@ Tracker for deferred fixes, clever hacks, and known gaps. Every deferred audit f
 
 ---
 
+## Bugs found by demo stands (P1-P2)
+
+### 16. ChannelsMiddleware drops DeadLetteringOptions instance
+
+**File**: `moleculerpy-channels/middleware.py` (parse_channel_definition)
+**Discovered**: 2026-04-08 demo_channels.py
+**Description**: `_parse_channel_definition` only accepts dlq config as `dict`, then constructs `DeadLetteringOptions(**dict)`. Passing an existing `DeadLetteringOptions` INSTANCE is silently dropped (dlq_opts stays None). Demo had to use dict form as workaround. Tests pass with MockBroker.
+**Priority**: P2
+**Effort**: ~15 min
+
+### 17. moleculerpy-web route hooks + memory transport hangs broker
+
+**File**: `moleculerpy-web/gateway.py` (route processing)
+**Discovered**: 2026-04-08 demo_web.py
+**Description**: Passing a callable in route config (`onBeforeCall`, `authorization`, `authentication`) causes `broker.transit.connect()` to hang indefinitely with memory transport. Likely the route config (with the function object) flows into action schema / DISCOVER and the serializer loop never resolves.
+**Workaround**: server-side auth check inside the action instead of route hook
+**Priority**: P1
+**Effort**: ~1h investigation
+
+### 18. EVENT payload field mismatch Python ↔ Node.js
+
+**File**: `moleculerpy/transit.py` event packet construction
+**Discovered**: 2026-04-08 demo_crosslang.py
+**Description**: MoleculerPy ships EVENT packet payload in field `params`, while Moleculer.js v0.14 (transit.js:982) reads from `data`. So Python emits → Node receives event but `ctx.params` is undefined. Discovery, RPC, INFO all work; only events have payload propagation gap.
+**Reference**: Node.js source `sources/reference-implementations/moleculer/src/transit.js` line ~982
+**Priority**: P1
+**Effort**: ~30 min (rename field + serializer adapter)
+
+### 19. MoleculerClientError(code=401) → HTTP 400 (not 401)
+
+**File**: `moleculerpy-web/error_handler.py` or response mapper
+**Discovered**: 2026-04-08 demo_web.py
+**Description**: When action raises `MoleculerClientError(code=401, type="UNAUTHORIZED")`, the gateway maps it to HTTP 400 instead of 401. Test had to accept both status codes.
+**Priority**: P2
+**Effort**: ~20 min
+
+### 20. demo_web graceful shutdown for streaming endpoints
+
+**Discovered**: 2026-04-08 demo_web.py test_graceful_shutdown
+**Description**: HTTP gateway streaming responses don't drain on broker.stop() — even with `tracking.enabled=True` (ContextTracker is action-level, not gateway-level). Test was relaxed to only verify `broker.stop()` returns cleanly.
+**Priority**: P3
+**Effort**: ~2h (gateway-level drain implementation)
+
 ## Closed (historical)
 
 _Items here are kept for context. Once a release is cut, move closed items to CHANGELOG references._
