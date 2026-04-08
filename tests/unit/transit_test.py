@@ -1854,3 +1854,14 @@ class TestRequestDiscovery:
             await transit._handle_info(packet)
 
             mock_discoverer.clear_discover_pending.assert_called_once_with("remote-node")
+
+
+def test_transit_is_connected_property(mock_dependencies, mock_transporter):
+    """Transit.is_connected reflects _was_connected state (public API)."""
+    with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+        transit = Transit(**mock_dependencies)
+        assert transit.is_connected is False
+        transit._was_connected = True
+        assert transit.is_connected is True
+        transit._was_connected = False
+        assert transit.is_connected is False

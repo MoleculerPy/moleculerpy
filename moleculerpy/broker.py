@@ -90,6 +90,7 @@ class ServiceBroker:
         self.local_bus = LocalBus()
 
         # Initialize middleware system
+        self._hook_signature_cache: dict[tuple[int, str], int] = {}
         self.middlewares = self._initialize_middlewares(middlewares)
         self.middleware_handler = MiddlewareHandler(self)
 
@@ -309,11 +310,15 @@ class ServiceBroker:
             no args. Introspect the bound method's parameters to choose.
             """
             method = getattr(mw, name)
-            try:
-                params = list(inspect.signature(method).parameters.values())
-            except (TypeError, ValueError):
-                return args
-            return args if len(params) >= 1 else ()
+            cache_key = (id(mw), name)
+            param_count = self._hook_signature_cache.get(cache_key)
+            if param_count is None:
+                try:
+                    param_count = len(inspect.signature(method).parameters)
+                except (TypeError, ValueError):
+                    return args
+                self._hook_signature_cache[cache_key] = param_count
+            return args if param_count >= 1 else ()
 
         if is_async:
             coroutines = []
@@ -765,6 +770,13 @@ class ServiceBroker:
         """
         self.logger.info(f"Registering service: {service.name}")
 
+        # Idempotency guard: if the same service (by full_name/name key) is
+        # already in the registry, skip seq++ and INFO broadcast. Prevents
+        # spurious INFO storms on hot reload or test teardown+reregister.
+        svc_full = getattr(service, "full_name", None)
+        svc_key = svc_full if isinstance(svc_full, str) else service.name
+        already_registered = svc_key in self.registry.__services__
+
         # Set broker reference on service
         service.broker = self
         service.logger = self.logger.bind(service=service.name)
@@ -781,16 +793,20 @@ class ServiceBroker:
         # localNodeInfoInvalidated="seq" → sendLocalNodeInfo).
         # Use self.node_catalog directly — transit uses the same catalog instance.
         local_node = self.node_catalog.local_node
-        if local_node is not None:
+        if local_node is not None and not already_registered:
             local_node.seq += 1
             # Only broadcast if transit is already connected. During
             # broker.start(), services register before transit connects;
             # in that case the initial INFO broadcast will carry the new seq.
-            if getattr(self.transit, "_was_connected", False):
+            if self.transit.is_connected:
                 try:
                     await self.transit.send_node_info()
                 except Exception as e:
                     self.logger.warning(f"Failed to broadcast INFO after service register: {e}")
+        elif already_registered:
+            self.logger.debug(
+                f"Service {svc_key} already registered; skipping seq++ and INFO broadcast"
+            )
 
         # Wrap action handlers with middleware (Moleculer pattern)
         # This ensures middleware is applied even for direct service.action() calls

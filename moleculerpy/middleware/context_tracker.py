@@ -37,11 +37,19 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from weakref import WeakKeyDictionary
 
 from moleculerpy.errors import MoleculerError
 from moleculerpy.middleware.base import Middleware
+
+
+@runtime_checkable
+class TrackingConfigLike(Protocol):
+    """Structural protocol for tracking config objects with an ``enabled`` flag."""
+
+    enabled: bool
+
 
 if TYPE_CHECKING:
     from moleculerpy.broker import ServiceBroker
@@ -166,8 +174,11 @@ class ContextTrackerMiddleware(Middleware):
         if isinstance(tracking, dict):
             return bool(tracking.get("enabled", True))
 
-        # TrackingConfig dataclass (or any object with `enabled` attribute)
-        return bool(getattr(tracking, "enabled", True))
+        # Type-safe duck typing via runtime-checkable Protocol
+        if isinstance(tracking, TrackingConfigLike):
+            return bool(tracking.enabled)
+
+        return True
 
     def _should_track_context(self, ctx: Context) -> bool:
         """Check if a specific context should be tracked.

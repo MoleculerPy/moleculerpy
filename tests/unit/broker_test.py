@@ -443,12 +443,41 @@ async def test_stopped_alias_skipped_when_no_override():
 
 
 @pytest.mark.asyncio
+async def test_alias_signature_cached(monkeypatch):
+    """inspect.signature must be called only once per (middleware, method)."""
+    from moleculerpy import broker as broker_mod
+    from moleculerpy.middleware.base import Middleware
+
+    class MW(Middleware):
+        async def stopped(self, broker: Any) -> None:
+            pass
+
+    broker = Broker(id="t-sig-cache")
+    broker.middlewares.append(MW())
+
+    real_signature = broker_mod.inspect.signature
+    calls = {"n": 0}
+
+    def counting_signature(obj: Any) -> Any:
+        calls["n"] += 1
+        return real_signature(obj)
+
+    monkeypatch.setattr(broker_mod.inspect, "signature", counting_signature)
+
+    await broker._execute_middleware_hooks("broker_stopped", broker)
+    await broker._execute_middleware_hooks("broker_stopped", broker)
+    await broker._execute_middleware_hooks("broker_stopped", broker)
+
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
 async def test_register_increments_local_seq(broker, mock_transit, mock_node_catalog):
     """register() must bump local_node.seq so remote nodes notice the change."""
     local_node = Mock()
     local_node.seq = 1
     mock_node_catalog.local_node = local_node
-    mock_transit._was_connected = False
+    mock_transit.is_connected = False
 
     await broker.register(TestService())
 
@@ -461,7 +490,7 @@ async def test_register_broadcasts_info_when_connected(broker, mock_transit, moc
     local_node = Mock()
     local_node.seq = 5
     mock_node_catalog.local_node = local_node
-    mock_transit._was_connected = True
+    mock_transit.is_connected = True
     mock_transit.send_node_info = AsyncMock()
 
     await broker.register(TestService())
@@ -476,10 +505,40 @@ async def test_register_no_broadcast_when_not_connected(broker, mock_transit, mo
     local_node = Mock()
     local_node.seq = 0
     mock_node_catalog.local_node = local_node
-    mock_transit._was_connected = False
+    mock_transit.is_connected = False
     mock_transit.send_node_info = AsyncMock()
 
     await broker.register(TestService())
 
     assert local_node.seq == 1
     mock_transit.send_node_info.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_register_idempotent(broker, mock_registry, mock_transit, mock_node_catalog):
+    """Re-registering the same service must not bump seq or re-broadcast INFO.
+
+    Hot reload and test teardown+reregister flows previously caused duplicate
+    INFO storms because register() unconditionally incremented seq.
+    """
+    local_node = Mock()
+    local_node.seq = 10
+    mock_node_catalog.local_node = local_node
+    mock_transit.is_connected = True
+    mock_transit.send_node_info = AsyncMock()
+
+    service = TestService()
+
+    # First registration: seq bumps, INFO broadcast fires.
+    await broker.register(service)
+    assert local_node.seq == 11
+    mock_transit.send_node_info.assert_awaited_once()
+
+    # Simulate that the registry now knows about this service
+    # (real Registry.register() populates __services__; mock doesn't).
+    mock_registry.__services__[service.name] = service
+
+    # Second registration of the same service must be a no-op for seq/INFO.
+    await broker.register(service)
+    assert local_node.seq == 11
+    mock_transit.send_node_info.assert_awaited_once()

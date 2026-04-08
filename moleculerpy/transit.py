@@ -146,6 +146,11 @@ class Transit:
         # Guard against repeated broker.stop() on NodeID conflict
         self._shutting_down: bool = False
 
+    @property
+    def is_connected(self) -> bool:
+        """Public API: True if transit has ever successfully connected."""
+        return self._was_connected
+
     def _emit_transporter_event(self, event: str, payload: dict[str, Any]) -> None:
         """Emit a transporter internal event via broker (fire-and-forget).
 

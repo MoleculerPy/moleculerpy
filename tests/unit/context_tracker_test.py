@@ -126,6 +126,29 @@ class TestTrackingConfiguration:
 
         assert middleware._is_tracking_enabled() is False
 
+    def test_is_tracking_enabled_with_trackingconfig(self, middleware):
+        """TrackingConfig dataclass instances are recognized via Protocol."""
+        from moleculerpy.settings import TrackingConfig
+
+        broker = MagicMock()
+        broker.settings = MagicMock()
+
+        broker.settings.tracking = TrackingConfig(enabled=False)
+        middleware.broker_created(broker)
+        assert middleware._is_tracking_enabled() is False
+
+        broker.settings.tracking = TrackingConfig(enabled=True)
+        assert middleware._is_tracking_enabled() is True
+
+    def test_is_tracking_enabled_unknown_object(self, middleware):
+        """Objects lacking `enabled` attribute fall back to True."""
+        broker = MagicMock()
+        broker.settings = MagicMock(spec=["tracking"])
+        broker.settings.tracking = object()
+        middleware.broker_created(broker)
+
+        assert middleware._is_tracking_enabled() is True
+
 
 class TestContextTrackingDecision:
     """Tests for per-context tracking decisions."""
