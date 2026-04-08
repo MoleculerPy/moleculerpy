@@ -91,7 +91,7 @@ DEMOS: list[Demo] = [
     Demo(
         name="demo_comprehensive",
         path=EXAMPLES_DIR / "demo_comprehensive.py",
-        expected="90/90",
+        expected="103/103",
         timeout=300,
         needs=["nats", "redis"],
     ),
@@ -112,7 +112,7 @@ DEMOS: list[Demo] = [
     Demo(
         name="demo_channels",
         path=EXAMPLES_DIR / "demo_channels.py",
-        expected="6/6",
+        expected="7/7",
         timeout=90,
         needs=["redis", "nats"],
     ),
@@ -126,7 +126,7 @@ DEMOS: list[Demo] = [
     Demo(
         name="demo_web",
         path=EXAMPLES_DIR / "demo_web.py",
-        expected="11/11",
+        expected="13/13",
         timeout=60,
         needs=[],
     ),

@@ -102,6 +102,22 @@ class UsersService(Service):
             raise MoleculerClientError("missing or invalid token", code=401, type="UNAUTHORIZED")
         return {"users": list(self._db.values())}
 
+    @action()
+    async def forbidden_op(self, ctx: Context) -> dict[str, Any]:
+        """Action that always refuses — exercises 403 mapping for code=403."""
+        raise MoleculerClientError("insufficient scope", code=403, type="FORBIDDEN")
+
+    @action()
+    async def missing_resource(self, ctx: Context) -> dict[str, Any]:
+        """Action that raises NOT_FOUND as a client-level error (code=404).
+
+        Distinct from the built-in ``ServiceNotFoundError`` path — here the
+        service exists and chooses to report "resource gone" at the action
+        layer via ``MoleculerClientError(code=404)``. This exercises the
+        numeric 404 fallthrough in the gateway error mapping.
+        """
+        raise MoleculerClientError("resource has been archived", code=404, type="NOT_FOUND")
+
 
 class StreamService(Service):
     """Returns async generator so the gateway streams chunks."""
@@ -172,6 +188,8 @@ async def run_tests() -> int:
                         "POST /users": "users.create",
                         "GET /stream": "stream.lines",
                         "GET /secure": "users.secure_list",
+                        "GET /forbidden": "users.forbidden_op",
+                        "GET /archived": "users.missing_resource",
                     },
                     "etag": True,
                     "cors": {
@@ -253,11 +271,31 @@ async def run_tests() -> int:
             print("--- 7. Server-side auth check ---")
             r_no = await client.get("/api/secure")
             r_ok = await client.get("/api/secure?token=let-me-in")
+            # Regression for KNOWN-ISSUES #19: 401 must be exact, not "400 or 401".
+            # Previously moleculer_error_to_http mapped every MoleculerClientError
+            # to BadRequestError(400) — this assertion used to accept the buggy
+            # 400 as "passing", hiding the real fix value. Now we demand the
+            # Node.js-compatible HTTP surface exactly.
             record(
-                "test_custom_middleware",
-                # MoleculerClientError(code=401) may pass through as 400/401 depending on mapping
-                r_no.status_code in (400, 401) and r_ok.status_code == 200,
-                f"without={r_no.status_code} with={r_ok.status_code}",
+                "test_client_error_401",
+                r_no.status_code == 401 and r_ok.status_code == 200,
+                f"without={r_no.status_code} (expected 401) with={r_ok.status_code}",
+            )
+
+            print("--- 7b. MoleculerClientError(code=403) -> HTTP 403 ---")
+            r = await client.get("/api/forbidden")
+            record(
+                "test_client_error_403",
+                r.status_code == 403,
+                f"status={r.status_code} (expected 403)",
+            )
+
+            print("--- 7c. MoleculerClientError(code=404) -> HTTP 404 ---")
+            r = await client.get("/api/archived")
+            record(
+                "test_client_error_404",
+                r.status_code == 404,
+                f"status={r.status_code} (expected 404)",
             )
 
             print("--- 8. ETag + 304 ---")

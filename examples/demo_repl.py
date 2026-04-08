@@ -53,7 +53,7 @@ except ImportError:  # pragma: no cover
     PingCommand = None  # type: ignore
 
 
-NATS_URL = "nats://localhost:4222"
+NATS_URL = "nats://localhost:4223"  # matches top-level docker-compose.yml
 
 
 # ---------- ANSI helpers ----------------------------------------------------
@@ -238,9 +238,9 @@ class Harness:
 async def main() -> int:
     print(_color(BOLD + "moleculerpy-repl command smoke stand" + RESET, CYAN))
 
-    if not _is_port_open("localhost", 4222):
-        print(_color("ERROR: NATS not reachable on localhost:4222", RED))
-        print("Start with: docker run -p 4222:4222 nats:2.10")
+    if not _is_port_open("localhost", 4223):
+        print(_color("ERROR: NATS not reachable on localhost:4223", RED))
+        print("Start with: (cd moleculerpy && docker compose up -d nats)")
         return 2
 
     settings = Settings(transporter=NATS_URL, log_level="CRITICAL")

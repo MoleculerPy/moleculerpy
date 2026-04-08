@@ -9,11 +9,9 @@ Usage:
     .venv/bin/python examples/demo_matrix.py --serializer cbor
 
 Docker services (optional, tested if reachable):
-    docker run -p 4222:4222 nats:2.10
-    docker run -p 6381:6379 valkey/valkey:7
-    docker run -p 1883:1883 eclipse-mosquitto:2
-    docker run -p 5672:5672 rabbitmq:3-management
-    docker run -p 9092:9092 confluentinc/cp-kafka:7.5.0
+    (cd moleculerpy && docker compose up -d)    # NATS 4223 + Redis 6381
+    (cd moleculerpy/tests/integration && docker compose -p integration up -d \
+        mosquitto rabbitmq kafka)                # MQTT / AMQP / Kafka
 """
 
 from __future__ import annotations
@@ -83,7 +81,7 @@ class Transport:
 TRANSPORTS: list[Transport] = [
     Transport("memory", "memory://", always_available=True, supports_remote=False),
     Transport("tcp", "tcp://", always_available=True, supports_remote=True),
-    Transport("nats", "nats://localhost:4222", host="localhost", port=4222),
+    Transport("nats", "nats://localhost:4223", host="localhost", port=4223),
     Transport("redis", "redis://localhost:6381", host="localhost", port=6381),
     Transport("mqtt", "mqtt://localhost:1883", host="localhost", port=1883),
     Transport("amqp", "amqp://guest:guest@localhost:5672", host="localhost", port=5672),

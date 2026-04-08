@@ -57,7 +57,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 NODE_SERVICES_DIR = REPO_ROOT / "tests" / "integration" / "node_services"
 NODE_INDEX = NODE_SERVICES_DIR / "index.js"
 NATS_HOST = "localhost"
-NATS_PORT = 4222
+NATS_PORT = 4223  # matches top-level docker-compose.yml (avoids 4222 collisions)
 
 RED = "\033[91m"
 GREEN = "\033[92m"
@@ -147,6 +147,12 @@ class NodeBrokerProcess:
         env["CROSSLANG_T3_LOG"] = str(T3_LOG)
         env["CROSSLANG_T4_LOG"] = str(T4_LOG)
         env["CROSSLANG_T5_LOG"] = str(T5_LOG)
+        # node_services/index.js reads NATS_URL from env so both brokers
+        # (Python + Node) agree on the transport endpoint. This matters
+        # because the top-level docker-compose.yml publishes NATS on the
+        # non-default 4223 to avoid colliding with other locally running
+        # NATS containers (e.g. graphrag-nats on 4222).
+        env["NATS_URL"] = f"nats://{NATS_HOST}:{NATS_PORT}"
         self.proc = subprocess.Popen(
             ["node", str(NODE_INDEX)],
             cwd=str(NODE_SERVICES_DIR),
@@ -371,34 +377,45 @@ async def run_tests(report: Report) -> None:
             # Use broadcast so every subscriber (Python collector + Node
             # crosslang_test service) receives it regardless of group balancing.
             await py_broker.broadcast("cross.lang.ping", {"from": "python", "marker": marker})
-            # Poll the file for up to 2s. We assert the handler actually
-            # fired on Node (presence of a "PING " line) as real proof of
-            # cross-language event delivery on the wire.
-            # Payload propagation note: MoleculerPy currently ships event
-            # payload in the `params` field of the EVENT packet, while
-            # Moleculer.js v0.14 reads from `data`. So delivery is verified,
-            # but ctx.params is empty on the Node side until that is fixed.
+
+            # Poll the file for up to 2s. Regression guard for KNOWN-ISSUES #18:
+            # we require BOTH
+            #   (a) the "PING " line appeared — Node handler actually fired,
+            #       which proves wire-level delivery works end-to-end, AND
+            #   (b) the full marker string is present in the payload — which
+            #       proves the EVENT packet field is "data" (Node.js parity),
+            #       not "params" (legacy Python-only).
+            # Pre-fix behaviour: (a) passed but (b) failed because Node's
+            # ctx.data was undefined and the handler wrote "PING {}". Prior
+            # versions of this demo scored that as PASS with a "payload empty"
+            # note — masking the real bug. It now fails loudly.
             deadline = time.perf_counter() + 2.0
             log_content = ""
             fired = False
+            payload_ok = False
             while time.perf_counter() < deadline:
                 if T4_LOG.exists():
                     log_content = T4_LOG.read_text()
                     if "PING " in log_content:
                         fired = True
-                        break
+                        if marker in log_content:
+                            payload_ok = True
+                            break
                 await asyncio.sleep(0.1)
-            if fired:
-                detail = (
-                    ""
-                    if marker in log_content
-                    else "(handler fired; payload empty — EVENT params/data gap)"
-                )
+
+            if fired and payload_ok:
                 report.add(
                     "T4 Python → Node event delivery",
                     True,
                     time.perf_counter() - t0,
-                    detail,
+                    f"marker={marker} echoed by Node",
+                )
+            elif fired and not payload_ok:
+                report.add(
+                    "T4 Python → Node event delivery",
+                    False,
+                    time.perf_counter() - t0,
+                    f"handler fired but marker missing — EVENT payload gap; log={log_content!r}",
                 )
             else:
                 report.add(
@@ -500,7 +517,8 @@ async def main() -> int:
         if not nats_ok:
             print(f"\n{RED}Cannot proceed without NATS.{NC}")
             print("  Start NATS with:")
-            print("    docker run -d --name nats -p 4222:4222 nats:latest")
+            print("    (cd moleculerpy && docker compose up -d nats)")
+            print(f"    Expected: nats://{NATS_HOST}:{NATS_PORT}")
             return 2
 
         node_ok, node_msg = check_node_setup()

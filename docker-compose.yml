@@ -1,0 +1,64 @@
+# MoleculerPy — Local Development Services
+#
+# Usage:
+#   docker compose up -d        # bring up dedicated NATS + Redis for demos
+#   docker compose down         # stop (state persists in named volumes)
+#   docker compose down -v      # stop + wipe state
+#
+# Port choices:
+#   NATS  4223  (not 4222 — the default is often taken by other projects
+#                 like graphrag-nats; use 4223 to stay conflict-free)
+#   NATS  8223  monitoring (default 8222 also commonly taken)
+#   Redis 6381  (matches the long-standing "demo-valkey" port used by the
+#                 demo suite; keeps REDIS_URL=redis://localhost:6381/15
+#                 working everywhere without per-demo overrides)
+#
+# Integration tests that need MQTT / RabbitMQ / Kafka live in
+# moleculerpy/tests/integration/docker-compose.yaml and are brought up
+# separately with `-p integration up -d mosquitto rabbitmq kafka`.
+
+services:
+  nats:
+    image: nats:2-alpine
+    container_name: moleculerpy-nats
+    command: ["--jetstream", "--store_dir", "/data"]
+    ports:
+      - "4223:4222"
+      - "8223:8222"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "nats-server", "--help"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - moleculerpy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: moleculerpy-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - moleculerpy
+    restart: unless-stopped
+
+volumes:
+  nats-data:
+  redis-data:
+
+networks:
+  moleculerpy:
+    driver: bridge

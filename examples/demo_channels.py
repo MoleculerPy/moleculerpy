@@ -12,7 +12,7 @@ Tests (6):
 Pre-flight:
     - moleculerpy_channels must be importable
     - Redis (Valkey) must be reachable on localhost:6381
-    - NATS must be reachable on localhost:4222 (optional — test 6 skips)
+    - NATS must be reachable on localhost:4223 (optional — test 6 skips)
 
 Run:
     .venv/bin/python examples/demo_channels.py
@@ -73,7 +73,7 @@ REDIS_HOST = "localhost"
 REDIS_PORT = 6381
 REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/15"
 NATS_HOST = "localhost"
-NATS_PORT = 4222
+NATS_PORT = 4223  # matches top-level docker-compose.yml (avoids 4222 collisions)
 NATS_URL = f"nats://{NATS_HOST}:{NATS_PORT}"
 
 
@@ -249,6 +249,128 @@ async def test_dlq() -> tuple[bool, str]:
         await sub.stop()
 
 
+async def test_dlq_typed_options() -> tuple[bool, str]:
+    """Regression for KNOWN-ISSUES #16.
+
+    Before the fix, ChannelsMiddleware._parse_channel_definition only
+    accepted a ``dict`` for the ``dead_lettering`` / ``redis`` config keys
+    and silently dropped anything else. Callers who built a typed
+    ``DeadLetteringOptions(...)`` / ``RedisOptions(...)`` instance up front
+    lost their DLQ configuration with no warning — the channel registered
+    successfully and messages failed to land in the expected DLQ stream.
+
+    This test:
+    1. Constructs ``DeadLetteringOptions`` and ``RedisOptions`` instances
+       directly (not dicts).
+    2. Passes them through service schema verbatim.
+    3. Publishes a message whose handler always raises, forcing retries
+       to exhaust and the message to reach the DLQ.
+    4. Asserts the DLQ queue actually received the message — proof the
+       instance-based config survived middleware init.
+
+    Pre-fix, step 4 would fail because the channel would have no DLQ
+    configured at all (options silently dropped).
+    """
+    from moleculerpy_channels.channel import DeadLetteringOptions, RedisOptions
+
+    await _cleanup_redis_streams()
+    ch = f"demo.dlq-typed.{uuid.uuid4().hex[:6]}"
+    dlq_name = f"DLQ_TYPED_{uuid.uuid4().hex[:6]}"
+    attempts = {"n": 0}
+
+    # Construct typed config objects — the exact thing #16 was about.
+    typed_dlq = DeadLetteringOptions(enabled=True, queue_name=dlq_name)
+    typed_redis = RedisOptions(min_idle_time=300, claim_interval=150, dlq_check_interval=1)
+
+    class TypedDlqSvc(Service):
+        name = "typed_dlq_svc"
+
+        @property
+        def schema(self) -> dict:
+            return {
+                "channels": {
+                    ch: {
+                        "group": "typed-dlq-g",
+                        "max_retries": 2,
+                        # These two lines are the regression surface —
+                        # previously middleware only accepted dicts here.
+                        "dead_lettering": typed_dlq,
+                        "redis": typed_redis,
+                        "handler": self._h,
+                    }
+                }
+            }
+
+        async def _h(self, payload: Any, raw: Any) -> None:
+            attempts["n"] += 1
+            raise ValueError(f"typed-boom #{attempts['n']}")
+
+    pub = await _make_broker("pub-typed-dlq", RedisAdapter(redis_url=REDIS_URL))
+    adapter = RedisAdapter(redis_url=REDIS_URL)
+    sub = await _make_broker("sub-typed-dlq", adapter)
+    await sub.register(TypedDlqSvc())
+
+    await pub.start()
+    await sub.start()
+
+    # Identity sanity probe — must run AFTER broker.start() because
+    # ChannelsMiddleware populates channel_registry during the started()
+    # hook, not during service registration. This is the load-bearing check
+    # for #16: if the middleware had silently rebuilt the config from dicts,
+    # ``is`` would fail even though the channel still functions.
+    channels_mw = None
+    for mw in sub.middlewares:
+        if hasattr(mw, "channel_registry"):
+            channels_mw = mw
+            break
+    if channels_mw is None:
+        await pub.stop()
+        await sub.stop()
+        return False, "ChannelsMiddleware not found in sub broker"
+
+    our_item = next(
+        (item for item in channels_mw.channel_registry if item["name"].endswith(ch)),
+        None,
+    )
+    if our_item is None:
+        await pub.stop()
+        await sub.stop()
+        registered = [item["name"] for item in channels_mw.channel_registry]
+        return False, f"channel not in registry (have {registered})"
+
+    our_channel = our_item["channel"]
+    if our_channel.dead_lettering is not typed_dlq:
+        await pub.stop()
+        await sub.stop()
+        return False, "DeadLetteringOptions instance dropped (dict-roundtrip)"
+    if our_channel.redis is not typed_redis:
+        await pub.stop()
+        await sub.stop()
+        return False, "RedisOptions instance dropped (dict-roundtrip)"
+    try:
+        await asyncio.sleep(0.3)
+        await pub.send_to_channel(ch, {"id": 1})
+        deadline = time.monotonic() + 40.0
+        dlq_msgs: list[Any] = []
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.5)
+            try:
+                dlq_msgs = await adapter.redis.xrange(dlq_name.encode(), b"-", b"+")
+            except Exception:
+                dlq_msgs = []
+            if dlq_msgs:
+                break
+        if not dlq_msgs:
+            return False, f"no DLQ message after {attempts['n']} attempts (instance dropped?)"
+        return (
+            True,
+            f"typed DLQ received {len(dlq_msgs)} msg after {attempts['n']} attempts",
+        )
+    finally:
+        await pub.stop()
+        await sub.stop()
+
+
 async def test_retry() -> tuple[bool, str]:
     await _cleanup_redis_streams()
     ch = f"demo.retry.{uuid.uuid4().hex[:6]}"
@@ -380,6 +502,7 @@ TESTS: list[tuple[str, Any]] = [
     ("basic_publish_subscribe", test_basic_publish_subscribe),
     ("consumer_groups", test_consumer_groups),
     ("dlq", test_dlq),
+    ("dlq_typed_options", test_dlq_typed_options),
     ("retry", test_retry),
     ("graceful_shutdown", test_graceful_shutdown),
     ("nats_adapter", test_nats_adapter),
