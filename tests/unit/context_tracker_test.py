@@ -311,13 +311,14 @@ class TestLifecycleHooks:
         assert hasattr(broker, "_tracked_contexts")
         assert broker._tracked_contexts == []
 
-    def test_service_starting_initializes_list(self):
-        """Test service_starting initializes tracking list."""
+    @pytest.mark.asyncio
+    async def test_service_created_initializes_list(self):
+        """Test service_created initializes tracking list."""
         mw = ContextTrackerMiddleware()
         service = MagicMock()
         service.name = "users"
 
-        mw.service_starting(service)
+        await mw.service_created(service)
 
         assert hasattr(service, "_tracked_contexts")
         assert service._tracked_contexts == []
@@ -595,7 +596,7 @@ class TestIntegrationPatterns:
         service = MagicMock()
         service.name = "orders"
         service.settings = {}
-        mw.service_starting(service)
+        await mw.service_created(service)
 
         # Create action handler
         action = MagicMock()

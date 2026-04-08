@@ -57,6 +57,8 @@ def mock_registry():
 def mock_node_catalog():
     catalog = Mock(spec=NodeCatalog)
     catalog.nodes = Mock()
+    catalog.local_node = Mock()
+    catalog.local_node.seq = 0
     return catalog
 
 
@@ -445,8 +447,7 @@ async def test_register_increments_local_seq(broker, mock_transit, mock_node_cat
     """register() must bump local_node.seq so remote nodes notice the change."""
     local_node = Mock()
     local_node.seq = 1
-    mock_transit.node_catalog = Mock()
-    mock_transit.node_catalog.local_node = local_node
+    mock_node_catalog.local_node = local_node
     mock_transit._was_connected = False
 
     await broker.register(TestService())
@@ -459,8 +460,7 @@ async def test_register_broadcasts_info_when_connected(broker, mock_transit, moc
     """When transit is already connected, register() must broadcast INFO."""
     local_node = Mock()
     local_node.seq = 5
-    mock_transit.node_catalog = Mock()
-    mock_transit.node_catalog.local_node = local_node
+    mock_node_catalog.local_node = local_node
     mock_transit._was_connected = True
     mock_transit.send_node_info = AsyncMock()
 
@@ -475,8 +475,7 @@ async def test_register_no_broadcast_when_not_connected(broker, mock_transit, mo
     """During broker.start(), transit isn't connected yet — no INFO broadcast."""
     local_node = Mock()
     local_node.seq = 0
-    mock_transit.node_catalog = Mock()
-    mock_transit.node_catalog.local_node = local_node
+    mock_node_catalog.local_node = local_node
     mock_transit._was_connected = False
     mock_transit.send_node_info = AsyncMock()
 

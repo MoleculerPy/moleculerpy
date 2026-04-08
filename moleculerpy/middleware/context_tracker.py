@@ -166,7 +166,8 @@ class ContextTrackerMiddleware(Middleware):
         if isinstance(tracking, dict):
             return bool(tracking.get("enabled", True))
 
-        return True
+        # TrackingConfig dataclass (or any object with `enabled` attribute)
+        return bool(getattr(tracking, "enabled", True))
 
     def _should_track_context(self, ctx: Context) -> bool:
         """Check if a specific context should be tracked.
@@ -278,10 +279,13 @@ class ContextTrackerMiddleware(Middleware):
             return
 
         poll_sec = self._poll_interval
-        elapsed = 0.0
+        # Use monotonic wall-clock deadline — asyncio.sleep only guarantees
+        # minimum delay, so cumulative elapsed undercounts real time.
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout_sec
 
         while tracked_list:
-            if elapsed >= timeout_sec:
+            if loop.time() >= deadline:
                 self.logger.error(
                     f"Graceful stop timeout reached. {len(tracked_list)} request(s) still pending."
                 )
@@ -290,7 +294,6 @@ class ContextTrackerMiddleware(Middleware):
                 raise GracefulStopTimeoutError(service_name=service_name)
 
             await asyncio.sleep(poll_sec)
-            elapsed += poll_sec
 
         self.logger.debug("All tracked contexts completed successfully")
 
@@ -308,8 +311,12 @@ class ContextTrackerMiddleware(Middleware):
         broker._tracked_contexts = tracked  # type: ignore[attr-defined]
         self.logger.debug("Broker context tracking initialized")
 
-    def service_starting(self, service: Service) -> None:
+    async def service_created(self, service: Service) -> None:
         """Initialize service-level tracking storage.
+
+        Hook fires after service registration via broker._execute_middleware_hooks.
+        Matches the actual hook name dispatched by ServiceBroker (was named
+        `service_starting` which the broker never dispatches).
 
         Args:
             service: The service instance
@@ -329,9 +336,13 @@ class ContextTrackerMiddleware(Middleware):
         if tracked is None or not tracked:
             return
 
-        # Get service-specific timeout or use default
+        # Get service-specific timeout or use default.
+        # Support both snake_case (Python) and camelCase (Node.js) for compat.
         settings = getattr(service, "settings", {})
-        timeout = settings.get("$shutdown_timeout", self._default_timeout)
+        timeout = settings.get(
+            "$shutdownTimeout",
+            settings.get("$shutdown_timeout", self._default_timeout),
+        )
 
         self.logger.info(
             f"Waiting for {len(tracked)} active request(s) "

@@ -31,6 +31,12 @@ class TrackingConfig:
     enabled: bool = False
     shutdown_timeout: float = 5.0
 
+    def __post_init__(self) -> None:
+        if self.shutdown_timeout <= 0:
+            raise ValueError(
+                f"TrackingConfig.shutdown_timeout must be positive, got {self.shutdown_timeout}"
+            )
+
 
 class Settings:
     """Configuration settings for the MoleculerPy broker.

@@ -138,14 +138,19 @@ class ServiceBroker:
 
         self._validator = resolve_validator(getattr(self.settings, "validator", "default"))
 
-        # Auto-register ContextTracker middleware if tracking enabled
+        # Auto-register ContextTracker middleware if tracking enabled.
+        # Guard against double-registration if user already added it manually.
         tracking_cfg = getattr(self.settings, "tracking", None)
         if tracking_cfg is not None and getattr(tracking_cfg, "enabled", False):
             from .middleware.context_tracker import ContextTrackerMiddleware  # noqa: PLC0415
 
-            self.middlewares.append(
-                ContextTrackerMiddleware(shutdown_timeout=tracking_cfg.shutdown_timeout)
+            already_present = any(
+                isinstance(mw, ContextTrackerMiddleware) for mw in self.middlewares
             )
+            if not already_present:
+                self.middlewares.append(
+                    ContextTrackerMiddleware(shutdown_timeout=tracking_cfg.shutdown_timeout)
+                )
 
         # Wrapped event methods (set during start() by middleware)
         self._wrapped_emit: (
@@ -315,7 +320,12 @@ class ServiceBroker:
             for middleware in self.middlewares:
                 pairs: list[tuple[str, tuple[Any, ...]]] = [(hook_name, args)]
                 if alias and _is_overridden(middleware, alias):
-                    pairs.append((alias, _alias_args(middleware, alias)))
+                    # Skip alias if it resolves to same method as primary hook
+                    # (prevents double-invoke for middleware overriding both forms)
+                    primary = getattr(middleware, hook_name, None)
+                    alias_method = getattr(middleware, alias, None)
+                    if primary is None or alias_method is not primary:
+                        pairs.append((alias, _alias_args(middleware, alias)))
                 for name, call_args in pairs:
                     hook = getattr(middleware, name, None)
                     if hook and callable(hook):
@@ -769,12 +779,10 @@ class ServiceBroker:
         # Node.js parity: increment seq + broadcast INFO so remote nodes
         # detect new services immediately (matches registry.js
         # localNodeInfoInvalidated="seq" → sendLocalNodeInfo).
-        transit_catalog = getattr(self.transit, "node_catalog", None) if self.transit else None
-        transit_local_node = (
-            getattr(transit_catalog, "local_node", None) if transit_catalog else None
-        )
-        if transit_local_node is not None:
-            transit_local_node.seq += 1
+        # Use self.node_catalog directly — transit uses the same catalog instance.
+        local_node = self.node_catalog.local_node
+        if local_node is not None:
+            local_node.seq += 1
             # Only broadcast if transit is already connected. During
             # broker.start(), services register before transit connects;
             # in that case the initial INFO broadcast will carry the new seq.

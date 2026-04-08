@@ -347,9 +347,9 @@ class TestTrackingConfig:
         assert s.tracking.shutdown_timeout == 10.0
 
     def test_tracking_config_validation(self):
-        with pytest.raises(SettingsValidationError) as exc_info:
-            Settings(tracking=TrackingConfig(shutdown_timeout=-1.0))
-        assert "tracking.shutdown_timeout" in str(exc_info.value)
+        # TrackingConfig validates in __post_init__ — fails before Settings check
+        with pytest.raises(ValueError, match="shutdown_timeout must be positive"):
+            TrackingConfig(shutdown_timeout=-1.0)
 
-        with pytest.raises(SettingsValidationError):
-            Settings(tracking=TrackingConfig(shutdown_timeout=0))
+        with pytest.raises(ValueError, match="shutdown_timeout must be positive"):
+            TrackingConfig(shutdown_timeout=0)
