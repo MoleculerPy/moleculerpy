@@ -7,6 +7,12 @@
 const { ServiceBroker } = require("moleculer");
 const { Middleware: ChannelsMiddleware } = require("@moleculer/channels");
 
+// Transporter endpoint is sourced from NATS_URL so the Python driver and
+// the top-level docker-compose.yml (NATS on 4223) stay in sync without
+// hand-editing this file. Default keeps the historical 4222 for
+// standalone Node experiments.
+const transporter = process.env.NATS_URL || "nats://localhost:4222";
+
 const received = {
     orders: [],
     payments: [],
@@ -14,10 +20,14 @@ const received = {
 
 const broker = new ServiceBroker({
     nodeID: "node-channels",
-    transporter: "nats://localhost:4222",
+    transporter: transporter,
     logger: {
         type: "Console",
-        options: { level: "info", colors: true, formatter: "full" },
+        options: {
+            level: process.env.MOLECULER_LOG_LEVEL || "info",
+            colors: false,
+            formatter: "full",
+        },
     },
     middlewares: [
         ChannelsMiddleware({

@@ -103,6 +103,13 @@ DEMOS: list[Demo] = [
         needs=["nats"],
     ),
     Demo(
+        name="demo_crosslang_channels",
+        path=EXAMPLES_DIR / "demo_crosslang_channels.py",
+        expected="2/2",
+        timeout=60,
+        needs=["nats"],
+    ),
+    Demo(
         name="demo_cacher",
         path=EXAMPLES_DIR / "demo_cacher.py",
         expected="7/7",

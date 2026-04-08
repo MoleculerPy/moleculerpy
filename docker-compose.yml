@@ -19,7 +19,16 @@
 
 services:
   nats:
-    image: nats:2-alpine
+    # Pinned to 2.10 — not the unrestricted 2-alpine tag — for cross-language
+    # channels interop. NATS 2.12+ enables JetStream strict mode and bumps
+    # the API level to 3, which breaks @moleculer/channels 0.2.0: stream
+    # creation calls return `did_create: true` but the streams never actually
+    # persist, so Python publishes fail with "no response from stream".
+    # moleculerpy-channels' own NATS adapter works fine on 2.12+, so the pin
+    # only matters when you need Node.js ↔ Python channels interop.
+    # Revisit when @moleculer/channels ships a release compatible with
+    # NATS server API level 3.
+    image: nats:2.10-alpine
     container_name: moleculerpy-nats
     command: ["--jetstream", "--store_dir", "/data"]
     ports:
