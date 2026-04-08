@@ -221,7 +221,7 @@ async def test_broker_emit_remote_event(broker, mock_registry, mock_transit, moc
 
     await broker.emit("event_name")  # Using unprefixed event name
 
-    mock_transit.send_event.assert_called_once_with(endpoint, context)
+    mock_transit.send_event.assert_called_once_with(endpoint, context, broadcast=False)
 
 
 @pytest.mark.asyncio
@@ -245,6 +245,7 @@ async def test_broker_broadcast_event(broker, mock_registry, mock_transit, mock_
         remote_endpoint,
         context,
         marshalled_context=marshalled,
+        broadcast=True,
     )
 
 
@@ -270,11 +271,13 @@ async def test_broker_broadcast_marshalls_once_for_multiple_remotes(
         remote_1,
         context,
         marshalled_context=marshalled,
+        broadcast=True,
     )
     mock_transit.send_event.assert_any_await(
         remote_2,
         context,
         marshalled_context=marshalled,
+        broadcast=True,
     )
 
 

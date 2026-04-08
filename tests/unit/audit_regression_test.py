@@ -216,3 +216,175 @@ async def test_broker_stop_hook_alias_no_double_invoke():
     assert call_log.count("broker_stopped") == 1
     assert call_log.count("stopped") == 1
     assert len(call_log) == 2
+
+
+# ---------------------------------------------------------------------------
+# 8. KNOWN-ISSUES #17: service.settings with callables must not hang
+# the INFO serializer. _serializable_settings strips non-JSON entries.
+# ---------------------------------------------------------------------------
+
+
+def test_bug17_service_settings_with_callables_are_stripped() -> None:
+    """Regression for KNOWN-ISSUES #17.
+
+    ``ApiGatewayService.settings`` carries route hooks (``onBeforeCall``,
+    ``authorization``, …) that are callable. Previously they flowed verbatim
+    into the INFO packet and crashed/hung JSON/msgpack/cbor serializers. The
+    node layer now routes settings through ``_serializable_settings`` which
+    keeps only JSON-encodable top-level values and logs a warning for the
+    dropped ones.
+    """
+    import json
+
+    from moleculerpy.node import _serializable_settings
+
+    def _hook() -> None:  # pragma: no cover — probe only
+        pass
+
+    raw = {
+        "port": 3000,
+        "host": "0.0.0.0",
+        "routes": [{"path": "/api"}],
+        "onBeforeCall": _hook,  # callable — must be dropped
+        "authorization": lambda req: None,  # callable — must be dropped
+        "path_obj": object(),  # non-encodable — must be dropped
+    }
+    cleaned = _serializable_settings(raw, service_name="test-gateway")
+
+    # JSON-safe values survive.
+    assert cleaned["port"] == 3000
+    assert cleaned["host"] == "0.0.0.0"
+    assert cleaned["routes"] == [{"path": "/api"}]
+    # Non-serializable values removed.
+    assert "onBeforeCall" not in cleaned
+    assert "authorization" not in cleaned
+    assert "path_obj" not in cleaned
+    # Result round-trips through json without raising — this is the exact
+    # contract the transit/transporter serializers rely on.
+    json.dumps(cleaned)
+
+
+def test_bug17_non_dict_settings_return_empty_dict() -> None:
+    """_serializable_settings accepts any shape; non-dict input yields {}."""
+    from moleculerpy.node import _serializable_settings
+
+    assert _serializable_settings(None) == {}
+    assert _serializable_settings("string") == {}
+    assert _serializable_settings(123) == {}
+
+
+# ---------------------------------------------------------------------------
+# 9. KNOWN-ISSUES #18: EVENT packets use Node.js-compatible "data" field
+# and carry broadcast/groups/caller/needAck; receive-side accepts both the
+# new "data" wire schema and the legacy "params" one for rolling upgrades.
+# ---------------------------------------------------------------------------
+
+
+def test_bug18_send_event_builds_node_js_wire_schema() -> None:
+    """Regression for KNOWN-ISSUES #18.
+
+    Previously ``transit.send_event`` forwarded ``context.marshall()`` which
+    placed the event payload under ``params`` — breaking every Node.js
+    consumer that reads ``ctx.data``. The fix builds an EVENT-specific wire
+    payload matching ``moleculer/src/transit.js#sendEvent`` exactly.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from moleculerpy.packet import Packet, Topic
+    from moleculerpy.transit import Transit
+
+    async def run() -> Packet:
+        mock_transporter = MagicMock()
+        mock_transporter.connect = AsyncMock()
+        mock_transporter.publish = AsyncMock()
+        mock_transporter.has_built_in_balancer = False
+
+        # Minimal concrete settings — Transit resolves a real serializer from
+        # the string, so MagicMock attributes would fail the registry lookup.
+        settings = MagicMock()
+        settings.transporter = "memory"
+        settings.serializer = "JSON"
+        settings.disable_balancer = False
+
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(
+                node_id="t-node",
+                registry=MagicMock(),
+                node_catalog=MagicMock(),
+                settings=settings,
+                logger=MagicMock(),
+                lifecycle=MagicMock(),
+            )
+
+            endpoint = MagicMock()
+            endpoint.node_id = "peer"
+
+            ctx = MagicMock()
+            ctx.id = "ctx-1"
+            ctx.event = "user.created"
+            ctx.params = {"id": 42}
+            ctx.meta = {"correlationId": "abc"}
+            ctx.level = 1
+            ctx.tracing = None
+            ctx.parent_id = None
+            ctx.request_id = "req-1"
+            ctx.caller = "v1.auth"
+            ctx.need_ack = False
+
+            await transit.send_event(endpoint, ctx, groups=["reporting"], broadcast=True)
+            return mock_transporter.publish.call_args[0][0]
+
+    packet = asyncio.run(run())
+
+    assert packet.type == Topic.EVENT
+    # Node.js parity: the field is "data", not "params".
+    assert packet.payload["data"] == {"id": 42}
+    assert "params" not in packet.payload
+    # Broadcast flag is propagated to the wire so remote receivers can
+    # distinguish emit vs broadcast dispatch.
+    assert packet.payload["broadcast"] is True
+    # Groups and cross-call metadata are present.
+    assert packet.payload["groups"] == ["reporting"]
+    assert packet.payload["caller"] == "v1.auth"
+    assert packet.payload["needAck"] is False
+    assert packet.payload["requestID"] == "req-1"
+    assert packet.payload["meta"] == {"correlationId": "abc"}
+
+
+def test_bug18_rebuild_event_context_accepts_data_and_params() -> None:
+    """Regression for KNOWN-ISSUES #18 — receive side.
+
+    A freshly upgraded Python peer must accept BOTH the new Node.js-parity
+    wire schema (``data``) and the legacy Python schema (``params``) so
+    rolling-upgrade clusters continue to deliver events during a deploy.
+    ``rebuild_event_context`` is the sole entry point that owns that aliasing.
+    """
+    from moleculerpy.lifecycle import Lifecycle
+
+    # Context.__init__ reads broker.nodeID when no explicit node_id is passed,
+    # so provide that one attribute on a stub broker. No other broker APIs are
+    # touched by the rebuild path.
+    stub_broker = MagicMock()
+    stub_broker.nodeID = "test-node"
+    lifecycle = Lifecycle(stub_broker)
+
+    # New wire schema: data carries the payload.
+    ctx_new = lifecycle.rebuild_event_context(
+        {"id": "e1", "event": "user.created", "data": {"id": 42}}
+    )
+    assert ctx_new.params == {"id": 42}
+    assert ctx_new.event == "user.created"
+
+    # Legacy wire schema from pre-0.14.22 Python peers: params carries it.
+    ctx_legacy = lifecycle.rebuild_event_context(
+        {"id": "e2", "event": "user.updated", "params": {"id": 7}}
+    )
+    assert ctx_legacy.params == {"id": 7}
+
+    # Both set (shouldn't happen, but defensive): "data" wins because the
+    # Node.js-parity field is the authoritative source going forward.
+    ctx_both = lifecycle.rebuild_event_context(
+        {"id": "e3", "event": "user.removed", "data": "fresh", "params": "stale"}
+    )
+    assert ctx_both.params == "fresh"

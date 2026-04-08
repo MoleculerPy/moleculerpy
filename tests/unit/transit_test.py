@@ -372,13 +372,15 @@ class TestTransit:
             transit.registry.get_event.return_value = mock_endpoint
 
             mock_context = MagicMock()
-            transit.lifecycle.rebuild_context.return_value = mock_context
+            transit.lifecycle.rebuild_event_context.return_value = mock_context
 
             packet = Packet(Topic.EVENT, "other-node", {"event": "test.event", "data": "test"})
             await transit._handle_event(packet)
 
             transit.registry.get_event.assert_called_once_with("test.event")
-            transit.lifecycle.rebuild_context.assert_called_once_with(
+            # _handle_event delegates to the EVENT-specific rebuild helper,
+            # passing the raw wire payload unchanged.
+            transit.lifecycle.rebuild_event_context.assert_called_once_with(
                 {"event": "test.event", "data": "test"}
             )
             mock_endpoint.handler.assert_called_once_with(mock_context)
@@ -585,7 +587,11 @@ class TestTransit:
 
     @pytest.mark.asyncio
     async def test_send_event(self, mock_dependencies, mock_transporter):
-        """Test Transit send_event method."""
+        """send_event builds an EVENT-specific wire payload matching Node.js.
+
+        Verifies the Node.js ``transit.js#sendEvent`` schema: field is ``data``
+        (not ``params``), plus ``broadcast``, ``groups``, ``needAck``, etc.
+        """
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
             transit = Transit(**mock_dependencies)
 
@@ -593,8 +599,19 @@ class TestTransit:
             mock_endpoint.node_id = "remote-node"
             mock_endpoint.name = "test.event"
 
+            # Build a context with concrete wire values (not MagicMock fields)
+            # so the constructed payload can be dict-compared.
             mock_context = MagicMock()
-            mock_context.marshall.return_value = {"event": "test.event", "data": "test"}
+            mock_context.id = "ctx-1"
+            mock_context.event = "test.event"
+            mock_context.params = {"x": 1}
+            mock_context.meta = {}
+            mock_context.level = 1
+            mock_context.tracing = None
+            mock_context.parent_id = None
+            mock_context.request_id = "req-1"
+            mock_context.caller = None
+            mock_context.need_ack = None
 
             await transit.send_event(mock_endpoint, mock_context)
 
@@ -602,11 +619,25 @@ class TestTransit:
             packet = mock_transporter.publish.call_args[0][0]
             assert packet.type == Topic.EVENT
             assert packet.target == "remote-node"
-            assert packet.payload == {"event": "test.event", "data": "test"}
+            # Node.js parity: data, not params
+            assert packet.payload["event"] == "test.event"
+            assert packet.payload["data"] == {"x": 1}
+            assert packet.payload["broadcast"] is False
+            assert packet.payload["groups"] is None
+            assert "needAck" in packet.payload
+            assert "caller" in packet.payload
+            assert "parentID" in packet.payload
+            assert "requestID" in packet.payload
 
     @pytest.mark.asyncio
     async def test_send_event_uses_pre_marshaled_payload(self, mock_dependencies, mock_transporter):
-        """send_event should skip context.marshall when payload is precomputed."""
+        """send_event should not call context.marshall when given a precomputed payload.
+
+        Pre-marshalled payload is sourced for meta/tracing/parent fields so
+        broadcasts can fan out to many remotes without re-marshalling each
+        time. Event name and data still come from the live context to keep
+        the wire schema consistent.
+        """
         with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
             transit = Transit(**mock_dependencies)
 
@@ -615,7 +646,19 @@ class TestTransit:
             mock_endpoint.name = "test.event"
 
             mock_context = MagicMock()
-            marshalled = {"event": "test.event", "data": "cached"}
+            mock_context.id = "ctx-1"
+            mock_context.event = "test.event"
+            mock_context.params = "cached"
+            marshalled = {
+                "event": "test.event",
+                "meta": {"k": "v"},
+                "level": 2,
+                "tracing": True,
+                "parentID": "parent-1",
+                "requestID": "req-1",
+                "caller": "svc.a",
+                "needAck": True,
+            }
 
             await transit.send_event(
                 mock_endpoint,
@@ -626,7 +669,17 @@ class TestTransit:
             mock_context.marshall.assert_not_called()
             mock_transporter.publish.assert_called_once()
             packet = mock_transporter.publish.call_args[0][0]
-            assert packet.payload == marshalled
+            # Source of truth for meta/tracing/parent is the pre-marshalled dict
+            assert packet.payload["meta"] == {"k": "v"}
+            assert packet.payload["level"] == 2
+            assert packet.payload["tracing"] is True
+            assert packet.payload["parentID"] == "parent-1"
+            assert packet.payload["requestID"] == "req-1"
+            assert packet.payload["caller"] == "svc.a"
+            assert packet.payload["needAck"] is True
+            # Event name + data still come from the live context
+            assert packet.payload["event"] == "test.event"
+            assert packet.payload["data"] == "cached"
 
     @pytest.mark.asyncio
     async def test_message_handler_routing(self, mock_dependencies, mock_transporter):
@@ -1323,7 +1376,7 @@ class TestTransitP0SafetyFixes:
             transit.registry.get_event.return_value = mock_endpoint
 
             mock_context = MagicMock()
-            transit.lifecycle.rebuild_context.return_value = mock_context
+            transit.lifecycle.rebuild_event_context.return_value = mock_context
 
             packet = Packet(Topic.EVENT, "other-node", {"event": "test.event", "data": "test"})
             await transit._handle_event(packet)
@@ -1567,7 +1620,7 @@ class TestTransitP0SafetyFixes:
 
             mock_context = MagicMock()
             mock_context.need_ack = False
-            transit.lifecycle.rebuild_context.return_value = mock_context
+            transit.lifecycle.rebuild_event_context.return_value = mock_context
 
             packet = Packet(Topic.EVENT, "other-node", {"event": "test.event", "data": "test"})
             await transit._handle_event(packet)

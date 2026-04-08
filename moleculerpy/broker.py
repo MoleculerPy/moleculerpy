@@ -1148,8 +1148,8 @@ class ServiceBroker:
             handler = endpoint.wrapped_handler or endpoint.handler
             return await handler(context)
         else:
-            # Handle remote event
-            return await self.transit.send_event(endpoint, context)
+            # Handle remote event (emit = single target, broadcast=False)
+            return await self.transit.send_event(endpoint, context, broadcast=False)
 
     async def emit(
         self,
@@ -1263,6 +1263,7 @@ class ServiceBroker:
                     endpoint,
                     context,
                     marshalled_context=marshalled_context,
+                    broadcast=True,
                 )
 
         resolved_tasks = [task for task in tasks if task is not None]

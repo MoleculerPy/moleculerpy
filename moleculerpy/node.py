@@ -12,6 +12,8 @@ Internal events emitted (Moleculer.js compatible):
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import sys
 import time
 from collections.abc import Coroutine
@@ -23,6 +25,60 @@ if TYPE_CHECKING:
 
 from .domain_types import NodeID
 from .registry import Action, Event
+
+_module_logger = logging.getLogger(__name__)
+
+
+def _serializable_settings(
+    settings: Any,
+    *,
+    service_name: str | None = None,
+) -> dict[str, Any]:
+    """Return a copy of ``settings`` containing only JSON-serializable values.
+
+    Service settings (e.g. ``ApiGatewayService``) may contain callables such as
+    route hooks (``onBeforeCall``, ``authorization``) or other non-serializable
+    objects. Including those in the INFO packet crashes or hangs the wire
+    serializer (json/msgpack/cbor). This helper probes each top-level value with
+    ``json.dumps`` and drops anything that cannot be encoded. Complex nested
+    serializers (msgpack/cbor) accept a strict JSON subset, so using JSON as the
+    lowest-common-denominator gate is safe across all transporters.
+
+    Dropped keys are logged at WARNING so operators can see that live objects
+    (callables, open files, etc.) are being stripped from the wire — silent
+    loss would make it very hard to diagnose "why doesn't my route hook fire
+    on the other node?" in a distributed deployment.
+
+    Args:
+        settings: Raw service settings dict (or any value).
+        service_name: Optional service full name used to annotate warnings so
+            operators can correlate dropped keys with a specific service.
+
+    Returns:
+        A new dict with only JSON-serializable entries. Returns an empty dict
+        when ``settings`` is not a dict.
+    """
+    if not isinstance(settings, dict):
+        return {}
+    result: dict[str, Any] = {}
+    dropped: list[str] = []
+    for key, value in settings.items():
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            dropped.append(str(key))
+            continue
+        result[key] = value
+    if dropped:
+        who = service_name or "<unknown service>"
+        _module_logger.warning(
+            "Stripping non-JSON-serializable setting keys from service %s "
+            "before INFO broadcast: %s. These are local-only and will not be "
+            "visible on other nodes.",
+            who,
+            ", ".join(dropped),
+        )
+    return result
 
 
 def _suppress_task_exception(task: asyncio.Task[Any]) -> None:
@@ -477,7 +533,7 @@ class NodeCatalog:
                 "name": service.name,
                 "version": getattr(service, "version", None),
                 "fullName": svc_full_name,
-                "settings": service.settings,
+                "settings": _serializable_settings(service.settings, service_name=svc_full_name),
                 "metadata": service.metadata,
                 "actions": {},
                 "events": {},
