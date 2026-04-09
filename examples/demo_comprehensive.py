@@ -112,7 +112,7 @@ class Transport:
 TRANSPORTS = [
     Transport("memory", "memory://", always_available=True, supports_remote=False),
     Transport("tcp", "tcp://", always_available=True, supports_remote=True),
-    Transport("nats", "nats://localhost:4222", host="localhost", port=4222),
+    Transport("nats", "nats://localhost:4223", host="localhost", port=4223),
     Transport("redis", "redis://localhost:6381", host="localhost", port=6381),
     Transport("mqtt", "mqtt://localhost:1883", host="localhost", port=1883),
     Transport("amqp", "amqp://guest:guest@localhost:5672", host="localhost", port=5672),
@@ -169,7 +169,7 @@ def _is_port_open(host: str, port: int) -> bool:
 def _make_urls(transport: Transport, suffix_a: str, suffix_b: str) -> tuple[str, str]:
     """Generate transport URLs for a 2-node test pair."""
     if transport.name == "tcp":
-        import hashlib  # noqa: PLC0415
+        import hashlib
 
         h = int(hashlib.md5(suffix_a.encode()).hexdigest()[:4], 16) % 200
         pa, pb = 31000 + h, 31000 + h + 1
@@ -237,7 +237,7 @@ async def t1_lifecycle(transport: Transport) -> list[TestResult]:
         await broker.register(MathService())
         await asyncio.wait_for(broker.start(), timeout=10.0)
         r = await asyncio.wait_for(broker.call("math.add", {"a": 1, "b": 2}), timeout=3.0)
-        assert r == 3, f"Expected 3, got {r}"  # noqa: PLR2004
+        assert r == 3, f"Expected 3, got {r}"
         await asyncio.wait_for(broker.stop(), timeout=5.0)
         results.append(TestResult("start-stop", True, time.perf_counter() - t0))
     except Exception as e:
@@ -264,7 +264,7 @@ async def t2_actions(transport: Transport) -> list[TestResult]:
             await asyncio.wait_for(broker.start(), timeout=10.0)
 
             r = await asyncio.wait_for(broker.call("math.add", {"a": 5, "b": 3}), timeout=3.0)
-            assert r == 8, f"Expected 8, got {r}"  # noqa: PLR2004
+            assert r == 8, f"Expected 8, got {r}"
             results.append(TestResult("local-call", True, time.perf_counter() - t0))
 
             await asyncio.wait_for(broker.stop(), timeout=5.0)
@@ -283,7 +283,7 @@ async def t2_actions(transport: Transport) -> list[TestResult]:
         # T2.1: Remote call
         t0 = time.perf_counter()
         r = await asyncio.wait_for(a.call("math.add", {"a": 10, "b": 20}), timeout=5.0)
-        assert r == 30, f"Expected 30, got {r}"  # noqa: PLR2004
+        assert r == 30, f"Expected 30, got {r}"
         results.append(TestResult("remote-call", True, time.perf_counter() - t0))
 
         # T2.2: Cross-service call (greeter calls math)
@@ -303,7 +303,7 @@ async def t2_actions(transport: Transport) -> list[TestResult]:
             ),
             timeout=5.0,
         )
-        assert multi[0] == 3 and "MoleculerPy" in str(multi[1])  # noqa: PLR2004
+        assert multi[0] == 3 and "MoleculerPy" in str(multi[1])
         results.append(TestResult("mcall", True, time.perf_counter() - t0))
 
     except Exception as e:
@@ -466,8 +466,8 @@ async def t6_versioning(transport: Transport) -> list[TestResult]:
         # Call v2
         r2 = await asyncio.wait_for(broker.call("v2.math.add", {"a": 2, "b": 3}), timeout=3.0)
 
-        assert r1 == 5, f"v1 expected 5, got {r1}"  # noqa: PLR2004
-        assert r2 == 50, f"v2 expected 50, got {r2}"  # noqa: PLR2004
+        assert r1 == 5, f"v1 expected 5, got {r1}"
+        assert r2 == 50, f"v2 expected 50, got {r2}"
         results.append(TestResult("versioned-calls", True, time.perf_counter() - t0))
 
         await asyncio.wait_for(broker.stop(), timeout=5.0)
@@ -506,6 +506,111 @@ async def t7_ping(transport: Transport) -> list[TestResult]:
     return results
 
 
+class CallableSettingsService(Service):
+    """Service that deliberately carries non-JSON-serializable values in
+    ``settings`` — exactly what ``ApiGatewayService`` does in real life with
+    route hooks (``onBeforeCall``, ``authorization``, …).
+
+    Before KNOWN-ISSUES #17 was fixed, registering this service on any
+    transport that actually encodes the INFO packet (JSON / msgpack / cbor /
+    protobuf) would hang or crash ``broker.start()`` mid-serialize. A memory
+    transport never exercised that path because it passes Python objects
+    in-process, so the bug was invisible to demo_web.
+
+    Settings are assigned in ``__init__`` (instance attribute) rather than as
+    a class attribute: RUF012 flags mutable class attributes, and more
+    importantly the non-JSON exotic values here are specifically designed to
+    probe ``_serializable_settings`` per-instance, not as a shared default.
+    """
+
+    name = "callable_settings_probe"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.settings = {
+            "label": "probe-service",
+            "on_before": lambda ctx: None,  # callable — must be stripped
+            "authorize": lambda req: True,  # callable — must be stripped
+            "exotic": object(),  # non-JSON — must be stripped
+            "safe_number": 42,
+            "safe_list": ["a", "b", "c"],
+        }
+
+    @action()
+    async def ping(self, ctx):
+        return "pong"
+
+
+async def t9_wire_safety(transport: Transport) -> list[TestResult]:
+    """T9: Wire safety — service.settings with callables must not hang the
+    INFO packet serializer. Regression for KNOWN-ISSUES #17.
+
+    Pass criteria per transport:
+    - ``broker.start()`` completes within 10s (no hang in serializer)
+    - ``broker.call`` on the probe service returns "pong" (service is alive)
+    - ``broker.stop()`` completes cleanly
+    - On remote transports: a second broker can discover the probe service
+      over the wire, i.e. the INFO packet was actually serialized and
+      delivered, not dropped silently.
+
+    Before the fix, on any real serializer this would hang indefinitely in
+    json.dumps(service.settings) trying to encode a callable.
+    """
+    results: list[TestResult] = []
+
+    # Single-broker test (covers the INFO packet construction path even on
+    # memory transport, so every transport contributes a datapoint).
+    t0 = time.perf_counter()
+    try:
+        broker = ServiceBroker(
+            id="t9-probe",
+            settings=Settings(transporter=transport.url, serializer="json", log_level="CRITICAL"),
+        )
+        await broker.register(CallableSettingsService())
+        # The key assertion: start() must NOT hang. A 10s budget is generous
+        # — the fix makes this O(ms). Pre-fix behaviour was infinite hang.
+        await asyncio.wait_for(broker.start(), timeout=10.0)
+        r = await asyncio.wait_for(broker.call("callable_settings_probe.ping", {}), timeout=3.0)
+        assert r == "pong", f"Expected 'pong', got {r!r}"
+        await asyncio.wait_for(broker.stop(), timeout=5.0)
+        results.append(TestResult("callable-settings-start", True, time.perf_counter() - t0))
+    except Exception as e:
+        results.append(
+            TestResult("callable-settings-start", False, time.perf_counter() - t0, str(e))
+        )
+
+    # Remote test: another broker must discover the probe service via the
+    # wire (INFO was really serialized and delivered, not just short-circuited
+    # in-process).
+    if not transport.supports_remote:
+        return results
+
+    a = b = None
+    try:
+        a, b = await _start_pair(
+            transport,
+            "t9-A",
+            "t9-B",
+            services_b=[CallableSettingsService()],
+        )
+        t0 = time.perf_counter()
+        # Discovery succeeds iff INFO packet was successfully encoded and
+        # decoded — the whole point of #17.
+        await a.wait_for_services(["callable_settings_probe"], timeout=20.0, interval=0.3)
+        r = await asyncio.wait_for(a.call("callable_settings_probe.ping", {}), timeout=5.0)
+        assert r == "pong", f"Expected 'pong', got {r!r}"
+        results.append(
+            TestResult("callable-settings-remote-discover", True, time.perf_counter() - t0)
+        )
+    except Exception as e:
+        results.append(TestResult("callable-settings-remote-discover", False, error=str(e)))
+    finally:
+        if a and b:
+            await _stop_pair(a, b)
+
+    return results
+
+
 async def t8_multi_service(transport: Transport) -> list[TestResult]:
     """T8: Multi-service — 3 services across 2 nodes, cross-calls."""
     results: list[TestResult] = []
@@ -529,7 +634,7 @@ async def t8_multi_service(transport: Transport) -> list[TestResult]:
         # T8.1: A calls math on B
         t0 = time.perf_counter()
         r = await asyncio.wait_for(a.call("math.add", {"a": 100, "b": 200}), timeout=5.0)
-        assert r == 300  # noqa: PLR2004
+        assert r == 300
         results.append(TestResult("cross-node-call", True, time.perf_counter() - t0))
 
         # T8.2: B calls greeter on A
@@ -566,6 +671,7 @@ ALL_GROUPS = [
     ("T6-Versioning", t6_versioning),
     ("T7-Ping", t7_ping),
     ("T8-MultiService", t8_multi_service),
+    ("T9-WireSafety", t9_wire_safety),
 ]
 
 

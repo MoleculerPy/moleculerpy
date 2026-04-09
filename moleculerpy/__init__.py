@@ -39,7 +39,7 @@ from .metrics import (
 )
 from .serializers import BaseSerializer, JsonSerializer, MsgPackSerializer, resolve_serializer
 from .service import Service
-from .settings import Settings, SettingsValidationError
+from .settings import Settings, SettingsValidationError, TrackingConfig
 from .stream import AsyncStream, StreamError
 from .tracing import (
     BaseTraceExporter,
@@ -54,7 +54,7 @@ from .tracing import (
 try:
     __version__ = version("moleculerpy")
 except PackageNotFoundError:
-    __version__ = "0.14.21"
+    __version__ = "0.14.22"
 
 __all__ = [  # noqa: RUF022
     # Core
@@ -65,6 +65,7 @@ __all__ = [  # noqa: RUF022
     "Lifecycle",
     "Settings",
     "SettingsValidationError",
+    "TrackingConfig",
     "NodeID",
     "ServiceName",
     "ActionName",

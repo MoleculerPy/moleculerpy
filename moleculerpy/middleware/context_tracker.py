@@ -19,7 +19,7 @@ Example usage:
         middlewares=[ContextTrackerMiddleware()],
         tracking={
             "enabled": True,
-            "shutdown_timeout": 5000,  # ms
+            "shutdown_timeout": 5.0,  # seconds
         },
     )
 
@@ -37,11 +37,19 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from weakref import WeakKeyDictionary
 
 from moleculerpy.errors import MoleculerError
 from moleculerpy.middleware.base import Middleware
+
+
+@runtime_checkable
+class TrackingConfigLike(Protocol):
+    """Structural protocol for tracking config objects with an ``enabled`` flag."""
+
+    enabled: bool
+
 
 if TYPE_CHECKING:
     from moleculerpy.broker import ServiceBroker
@@ -108,8 +116,8 @@ class ContextTrackerMiddleware(Middleware):
     Attributes:
         logger: Logger for tracking events
         _broker: Reference to the broker instance
-        _default_timeout: Default shutdown timeout in milliseconds
-        _poll_interval: Polling interval for shutdown check (ms)
+        _default_timeout: Default shutdown timeout in seconds
+        _poll_interval: Polling interval for shutdown check (seconds)
     """
 
     __slots__ = (
@@ -123,15 +131,15 @@ class ContextTrackerMiddleware(Middleware):
 
     def __init__(
         self,
-        shutdown_timeout: int = 5000,
-        poll_interval: int = 100,
+        shutdown_timeout: float = 5.0,
+        poll_interval: float = 0.1,
         logger: logging.Logger | None = None,
     ) -> None:
         """Initialize the ContextTrackerMiddleware.
 
         Args:
-            shutdown_timeout: Default shutdown timeout in milliseconds
-            poll_interval: Polling interval for shutdown check (ms)
+            shutdown_timeout: Default shutdown timeout in seconds
+            poll_interval: Polling interval for shutdown check (seconds)
             logger: Optional logger for tracking events
         """
         super().__init__()
@@ -144,7 +152,7 @@ class ContextTrackerMiddleware(Middleware):
 
     def __repr__(self) -> str:
         """Return string representation for debugging."""
-        return f"ContextTrackerMiddleware(timeout={self._default_timeout}ms)"
+        return f"ContextTrackerMiddleware(timeout={self._default_timeout}s)"
 
     def _is_tracking_enabled(self) -> bool:
         """Check if tracking is enabled in broker settings.
@@ -165,6 +173,10 @@ class ContextTrackerMiddleware(Middleware):
 
         if isinstance(tracking, dict):
             return bool(tracking.get("enabled", True))
+
+        # Type-safe duck typing via runtime-checkable Protocol
+        if isinstance(tracking, TrackingConfigLike):
+            return bool(tracking.enabled)
 
         return True
 
@@ -259,7 +271,7 @@ class ContextTrackerMiddleware(Middleware):
     async def _wait_for_contexts(
         self,
         tracked_list: list[Context],
-        timeout_ms: int,
+        timeout_sec: float,
         service_name: str | None = None,
     ) -> None:
         """Wait for all tracked contexts to complete.
@@ -268,7 +280,7 @@ class ContextTrackerMiddleware(Middleware):
 
         Args:
             tracked_list: List of tracked contexts
-            timeout_ms: Timeout in milliseconds
+            timeout_sec: Timeout in seconds
             service_name: Service name for error reporting
 
         Raises:
@@ -277,12 +289,14 @@ class ContextTrackerMiddleware(Middleware):
         if not tracked_list:
             return
 
-        timeout_sec = timeout_ms / 1000.0
-        poll_sec = self._poll_interval / 1000.0
-        elapsed = 0.0
+        poll_sec = self._poll_interval
+        # Use monotonic wall-clock deadline — asyncio.sleep only guarantees
+        # minimum delay, so cumulative elapsed undercounts real time.
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout_sec
 
         while tracked_list:
-            if elapsed >= timeout_sec:
+            if loop.time() >= deadline:
                 self.logger.error(
                     f"Graceful stop timeout reached. {len(tracked_list)} request(s) still pending."
                 )
@@ -291,7 +305,6 @@ class ContextTrackerMiddleware(Middleware):
                 raise GracefulStopTimeoutError(service_name=service_name)
 
             await asyncio.sleep(poll_sec)
-            elapsed += poll_sec
 
         self.logger.debug("All tracked contexts completed successfully")
 
@@ -309,8 +322,12 @@ class ContextTrackerMiddleware(Middleware):
         broker._tracked_contexts = tracked  # type: ignore[attr-defined]
         self.logger.debug("Broker context tracking initialized")
 
-    def service_starting(self, service: Service) -> None:
+    async def service_created(self, service: Service) -> None:
         """Initialize service-level tracking storage.
+
+        Hook fires after service registration via broker._execute_middleware_hooks.
+        Matches the actual hook name dispatched by ServiceBroker (was named
+        `service_starting` which the broker never dispatches).
 
         Args:
             service: The service instance
@@ -330,13 +347,17 @@ class ContextTrackerMiddleware(Middleware):
         if tracked is None or not tracked:
             return
 
-        # Get service-specific timeout or use default
+        # Get service-specific timeout or use default.
+        # Support both snake_case (Python) and camelCase (Node.js) for compat.
         settings = getattr(service, "settings", {})
-        timeout = settings.get("$shutdown_timeout", self._default_timeout)
+        timeout = settings.get(
+            "$shutdownTimeout",
+            settings.get("$shutdown_timeout", self._default_timeout),
+        )
 
         self.logger.info(
             f"Waiting for {len(tracked)} active request(s) "
-            f"in service '{service.name}' (timeout: {timeout}ms)"
+            f"in service '{service.name}' (timeout: {timeout}s)"
         )
 
         try:
@@ -368,7 +389,7 @@ class ContextTrackerMiddleware(Middleware):
             timeout = self._default_timeout
 
         self.logger.info(
-            f"Waiting for {len(tracked)} active remote request(s) (timeout: {timeout}ms)"
+            f"Waiting for {len(tracked)} active remote request(s) (timeout: {timeout}s)"
         )
 
         try:

@@ -92,9 +92,14 @@ message PacketDisconnect {
 }
 
 message PacketHeartbeat {
-	string ver 		= 1;
-	string sender 	= 2;
-	double cpu 		= 3;
+	string ver 			= 1;
+	string sender 		= 2;
+	double cpu 			= 3;
+	// Field numbers 4-7 are RESERVED FOREVER (previously held MoleculerPy
+	// extension fields seq/instanceID/memory/cpuSeq). Reverted to match
+	// Node.js wire format exactly. See: .forgeplan/adrs/ADR-heartbeat-schema.md
+	reserved 4, 5, 6, 7;
+	reserved "seq", "instanceID", "memory", "cpuSeq";
 }
 
 message PacketPing {

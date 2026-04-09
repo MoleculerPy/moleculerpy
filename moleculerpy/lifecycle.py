@@ -105,6 +105,38 @@ class Lifecycle:
             seq=seq,
         )
 
+    def rebuild_event_context(self, payload: dict[str, Any]) -> Context:
+        """Rebuild a Context from an EVENT packet payload.
+
+        EVENT wire schema (Node.js ``transit.js#sendEvent``) carries the event
+        data under the key ``data`` — unlike REQUEST schema which uses
+        ``params``. This method knows that distinction so :meth:`rebuild_context`
+        (shared with REQUEST handling) does not need to conflate the two.
+
+        Older Python peers (pre-0.14.22) sent EVENT payloads with ``params``;
+        this method accepts that as a fallback to preserve rolling-upgrade
+        compatibility inside a mixed-version Python cluster.
+
+        Args:
+            payload: Dict from an incoming EVENT packet.
+
+        Returns:
+            Fully reconstructed Context for the event handler.
+        """
+        # Prefer Node.js-compatible "data"; fall back to legacy "params" so a
+        # freshly upgraded node still accepts traffic from older peers.
+        if "data" in payload:
+            params = payload.get("data")
+        else:
+            params = payload.get("params")
+
+        # Stitch the normalised value back in so the shared rebuild path stays
+        # single-source-of-truth for the remaining fields. We copy to avoid
+        # mutating the caller's packet payload.
+        normalised: dict[str, Any] = dict(payload)
+        normalised["params"] = params
+        return self.rebuild_context(normalised)
+
     def rebuild_context(self, context_dict: dict[str, Any]) -> Context:
         """Rebuild a context from a dictionary representation.
 

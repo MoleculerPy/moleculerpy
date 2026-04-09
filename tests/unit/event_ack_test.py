@@ -71,7 +71,16 @@ def mock_lifecycle(mock_broker):
             ack_id=payload.get("ackID"),
         )
 
+    def rebuild_event_context(payload: dict[str, Any]) -> Context:
+        # Mirror production behaviour: EVENT wire schema uses "data"; delegate
+        # to rebuild_context after aliasing so the two paths stay in sync.
+        normalised = dict(payload)
+        if "data" in payload:
+            normalised["params"] = payload.get("data")
+        return rebuild_context(normalised)
+
     lifecycle.rebuild_context = rebuild_context
+    lifecycle.rebuild_event_context = rebuild_event_context
     return lifecycle
 
 
