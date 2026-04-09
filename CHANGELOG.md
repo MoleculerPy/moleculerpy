@@ -5,6 +5,94 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.22] - 2026-04-09
+
+### Fixed
+- **`pip install moleculerpy` no longer crashes without `redis` (P0)** —
+  `moleculerpy/cacher/__init__.py` used to unconditionally
+  `from .redis import RedisCacher`, but `redis` is only declared in
+  the `test` extra. As a result, constructing a plain `ServiceBroker`
+  on a base install raised `ModuleNotFoundError: No module named
+  'redis'` — every clean `pip install moleculerpy` was broken since
+  0.14.10. The RedisCacher import is now optional (same pattern as
+  `moleculerpy-channels/adapters`) with a stub fallback, and the
+  `"redis"` / `"Redis"` registry entries are only wired when the
+  dependency is available. `resolve("redis")` on a base install now
+  fails loudly with the informative `Unknown cacher type: 'redis'`.
+  Caught by the v0.14.22 smoke install pipeline step before release.
+- **EVENT wire schema — `data` field (Node.js parity, KNOWN-ISSUES #18)** —
+  `transit.send_event` now builds an EVENT-specific wire payload matching
+  `moleculer/src/transit.js#sendEvent` exactly: field is `data`, not
+  `params`, plus `broadcast`, `groups`, `needAck`, `caller`, `parentID`,
+  `requestID`, `level`, `tracing`, `meta`. New `broadcast` kwarg is
+  passed from `broker._emit_core` (False) and `_broadcast_core` (True)
+  so receivers can honour Moleculer v4 emit/broadcast semantics.
+  Cross-language event delivery Python → Node.js now works for the
+  first time — `demo_crosslang` T4 log goes from 8 to 55 bytes (real
+  marker payload).
+- **EVENT receive side: new `Lifecycle.rebuild_event_context`** — owns
+  the `data` → internal `params` translation and falls back to legacy
+  `params` so a freshly upgraded node still accepts traffic from
+  pre-0.14.22 Python peers during rolling deploys.
+- **Service settings sanitizer (KNOWN-ISSUES #17)** —
+  `node.ensure_local_node` now routes `service.settings` through a new
+  `_serializable_settings` helper that probes each top-level value with
+  `json.dumps` and drops any non-JSON-serializable entries before
+  including them in the INFO packet. Previously services like
+  `ApiGatewayService` with callable route hooks (`onBeforeCall`,
+  `authorization`) hung or crashed the wire serializer on any real
+  transporter. Dropped keys are logged at WARNING so the omission is
+  observable.
+
+### Tests / evidence
+- **`demo_comprehensive` T9-WireSafety** — new test group exercises
+  the callable-in-settings path on all 7 transports (memory + tcp +
+  nats + redis + mqtt + amqp + kafka) via a `CallableSettingsService`
+  with lambdas and `object()` in its settings. +13 real data points
+  across actual JSON serializer runs. Counterfactual: reverting
+  `_serializable_settings` makes `callable-settings-start` hang for
+  the full 10s timeout on NATS, reproducing the original bug.
+- **`demo_crosslang` T4 tightened** — previously accepted "handler
+  fired; payload empty" as PASS (masking #18). Now requires both the
+  handler firing AND the full marker string in the Node-written
+  `/tmp/crosslang_test_T4_*.log`. Counterfactual: reverting
+  `transit.send_event` makes T4 fail with
+  `handler fired but marker missing — EVENT payload gap; log='PING {}'`.
+- **`demo_crosslang_channels` (NEW)** — proves cross-language channels
+  wire compatibility at the JetStream protocol level: Python publishes
+  on `payments.completed` → Node direct `nats.js` consumer receives;
+  Node publishes on `orders.created` → moleculerpy-channels NatsAdapter
+  delivers to Python handler. Both directions assert a per-run marker
+  round-trips intact. Uses a raw `nats` Node harness (not
+  `@moleculer/channels`) to sidestep an upstream regression in
+  `@moleculer/channels` 0.2.0 where `manager.streams.add()` silently
+  fails to persist streams. The wire contract is what matters — any
+  library agreeing on it interoperates.
+- **Audit regression tests** — 4 new locks in
+  `tests/unit/audit_regression_test.py`:
+  `test_bug17_service_settings_with_callables_are_stripped`,
+  `test_bug17_non_dict_settings_return_empty_dict`,
+  `test_bug18_send_event_builds_node_js_wire_schema`,
+  `test_bug18_rebuild_event_context_accepts_data_and_params`.
+
+### Infrastructure
+- **`docker-compose.yml` moved into the repo** — was floating in the
+  parent workspace dir outside any git history; a fresh clone would
+  have lost it. Now canonical at `moleculerpy/docker-compose.yml`.
+- **NATS port 4223 / Redis port 6381** — picked to avoid collisions
+  with other locally running NATS instances. Matches the long-standing
+  `demo-valkey` convention for Redis.
+- **NATS pinned to 2.10-alpine** — NATS 2.12 enables JetStream strict
+  mode + API level 3 which has compatibility issues with
+  `@moleculer/channels` 0.2.0. MoleculerPy's own NATS adapter works
+  fine on 2.12+, but 2.10 is a stable baseline for cross-language
+  channels interop work.
+
+### Demos
+- **9 demos / 184 checks / ~150 s total** (up from 8/166/131 in
+  0.14.21). Run via
+  `(cd moleculerpy && .venv/bin/python examples/run_all_demos.py)`.
+
 ## [0.14.21] - 2026-04-07
 
 ### Added

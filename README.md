@@ -167,7 +167,7 @@ broker = ServiceBroker(middlewares=[LoggingMiddleware()])
 
 # Roadmap
 
-## Current status (v0.14.19)
+## Current status (v0.14.22)
 - Core framework with full service lifecycle
 - **7 Transporters**: NATS, Redis/Valkey, Memory, MQTT, AMQP, Kafka, **TCP+Gossip (P2P)**
 - **4 Serializers**: JSON, MsgPack, **CBOR** (-29% vs JSON), **ProtoBuf** (-25% vs JSON)
