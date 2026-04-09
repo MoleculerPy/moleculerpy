@@ -6,6 +6,7 @@ communication, and lifecycle management.
 """
 
 import asyncio
+import inspect
 import signal
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -89,6 +90,7 @@ class ServiceBroker:
         self.local_bus = LocalBus()
 
         # Initialize middleware system
+        self._hook_signature_cache: dict[tuple[int, str], int] = {}
         self.middlewares = self._initialize_middlewares(middlewares)
         self.middleware_handler = MiddlewareHandler(self)
 
@@ -136,6 +138,20 @@ class ServiceBroker:
         from .validators import resolve_validator  # noqa: PLC0415
 
         self._validator = resolve_validator(getattr(self.settings, "validator", "default"))
+
+        # Auto-register ContextTracker middleware if tracking enabled.
+        # Guard against double-registration if user already added it manually.
+        tracking_cfg = getattr(self.settings, "tracking", None)
+        if tracking_cfg is not None and getattr(tracking_cfg, "enabled", False):
+            from .middleware.context_tracker import ContextTrackerMiddleware  # noqa: PLC0415
+
+            already_present = any(
+                isinstance(mw, ContextTrackerMiddleware) for mw in self.middlewares
+            )
+            if not already_present:
+                self.middlewares.append(
+                    ContextTrackerMiddleware(shutdown_timeout=tracking_cfg.shutdown_timeout)
+                )
 
         # Wrapped event methods (set during start() by middleware)
         self._wrapped_emit: (
@@ -264,21 +280,74 @@ class ServiceBroker:
         Returns:
             List of coroutines if is_async=True, None otherwise
         """
+        # Node.js Moleculer uses short hook names (starting/started/stopping/stopped)
+        # while MoleculerPy historically used broker_* names. To maintain backward
+        # compatibility AND Node.js ecosystem compatibility, we invoke both names.
+        # Special case for "stopped": base Middleware.stopped() is a no-arg
+        # self-cleanup hook (legacy), but Node.js-style stopped(broker) takes the
+        # broker. We use signature introspection to support both: if subclass
+        # override accepts >=1 parameter, call with broker; otherwise call no-arg.
+        from .middleware.base import Middleware as _BaseMiddleware  # noqa: PLC0415
+
+        _broker_hook_aliases = {
+            "broker_starting": "starting",
+            "broker_started": "started",
+            "broker_stopping": "stopping",
+            "broker_stopped": "stopped",
+        }
+        alias = _broker_hook_aliases.get(hook_name)
+
+        def _is_overridden(mw: Any, name: str) -> bool:
+            """True if mw class overrides the alias method (not base no-op)."""
+            mw_method = getattr(type(mw), name, None)
+            base_method = getattr(_BaseMiddleware, name, None)
+            return mw_method is not None and mw_method is not base_method
+
+        def _alias_args(mw: Any, name: str) -> tuple[Any, ...]:
+            """Return args to pass to the alias based on its signature.
+
+            Node.js-style hooks accept broker; legacy Middleware.stopped() takes
+            no args. Introspect the bound method's parameters to choose.
+            """
+            method = getattr(mw, name)
+            cache_key = (id(mw), name)
+            param_count = self._hook_signature_cache.get(cache_key)
+            if param_count is None:
+                try:
+                    param_count = len(inspect.signature(method).parameters)
+                except (TypeError, ValueError):
+                    return args
+                self._hook_signature_cache[cache_key] = param_count
+            return args if param_count >= 1 else ()
+
         if is_async:
             coroutines = []
             for middleware in self.middlewares:
-                hook = getattr(middleware, hook_name, None)
-                if hook and callable(hook):
-                    result = hook(*args)
-                    if asyncio.iscoroutine(result):
-                        coroutines.append(result)
+                pairs: list[tuple[str, tuple[Any, ...]]] = [(hook_name, args)]
+                if alias and _is_overridden(middleware, alias):
+                    # Skip alias if it resolves to same method as primary hook
+                    # (prevents double-invoke for middleware overriding both forms)
+                    primary = getattr(middleware, hook_name, None)
+                    alias_method = getattr(middleware, alias, None)
+                    if primary is None or alias_method is not primary:
+                        pairs.append((alias, _alias_args(middleware, alias)))
+                for name, call_args in pairs:
+                    hook = getattr(middleware, name, None)
+                    if hook and callable(hook):
+                        result = hook(*call_args)
+                        if asyncio.iscoroutine(result):
+                            coroutines.append(result)
             return coroutines if coroutines else None
         else:
             # Synchronous hooks
             for middleware in self.middlewares:
-                hook = getattr(middleware, hook_name, None)
-                if hook and callable(hook):
-                    hook(*args)
+                pairs = [(hook_name, args)]
+                if alias and _is_overridden(middleware, alias):
+                    pairs.append((alias, _alias_args(middleware, alias)))
+                for name, call_args in pairs:
+                    hook = getattr(middleware, name, None)
+                    if hook and callable(hook):
+                        hook(*call_args)
             return None
 
     async def _execute_middleware_hooks(
@@ -559,6 +628,13 @@ class ServiceBroker:
             if self.cacher:
                 await self.cacher.stop()
 
+            # Drain: notify peers we're shutting down (empty services) so
+            # they stop routing new requests to us BEFORE we DISCONNECT.
+            try:
+                await self.transit.send_disconnect_info()
+            except Exception as e:
+                self.logger.warning(f"Error sending drain INFO: {e}")
+
             # Disconnect from the cluster
             await self.transit.disconnect()
 
@@ -694,6 +770,13 @@ class ServiceBroker:
         """
         self.logger.info(f"Registering service: {service.name}")
 
+        # Idempotency guard: if the same service (by full_name/name key) is
+        # already in the registry, skip seq++ and INFO broadcast. Prevents
+        # spurious INFO storms on hot reload or test teardown+reregister.
+        svc_full = getattr(service, "full_name", None)
+        svc_key = svc_full if isinstance(svc_full, str) else service.name
+        already_registered = svc_key in self.registry.__services__
+
         # Set broker reference on service
         service.broker = self
         service.logger = self.logger.bind(service=service.name)
@@ -704,6 +787,26 @@ class ServiceBroker:
         # Register with registry and update local node
         self.registry.register(service)
         self.node_catalog.ensure_local_node()
+
+        # Node.js parity: increment seq + broadcast INFO so remote nodes
+        # detect new services immediately (matches registry.js
+        # localNodeInfoInvalidated="seq" → sendLocalNodeInfo).
+        # Use self.node_catalog directly — transit uses the same catalog instance.
+        local_node = self.node_catalog.local_node
+        if local_node is not None and not already_registered:
+            local_node.seq += 1
+            # Only broadcast if transit is already connected. During
+            # broker.start(), services register before transit connects;
+            # in that case the initial INFO broadcast will carry the new seq.
+            if self.transit.is_connected:
+                try:
+                    await self.transit.send_node_info()
+                except Exception as e:
+                    self.logger.warning(f"Failed to broadcast INFO after service register: {e}")
+        elif already_registered:
+            self.logger.debug(
+                f"Service {svc_key} already registered; skipping seq++ and INFO broadcast"
+            )
 
         # Wrap action handlers with middleware (Moleculer pattern)
         # This ensures middleware is applied even for direct service.action() calls
@@ -1045,8 +1148,8 @@ class ServiceBroker:
             handler = endpoint.wrapped_handler or endpoint.handler
             return await handler(context)
         else:
-            # Handle remote event
-            return await self.transit.send_event(endpoint, context)
+            # Handle remote event (emit = single target, broadcast=False)
+            return await self.transit.send_event(endpoint, context, broadcast=False)
 
     async def emit(
         self,
@@ -1160,6 +1263,7 @@ class ServiceBroker:
                     endpoint,
                     context,
                     marshalled_context=marshalled_context,
+                    broadcast=True,
                 )
 
         resolved_tasks = [task for task in tasks if task is not None]

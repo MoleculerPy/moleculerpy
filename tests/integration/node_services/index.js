@@ -1,9 +1,15 @@
 const { ServiceBroker } = require("moleculer");
 
+// Transporter is sourced from NATS_URL env var so the Python demo_crosslang
+// driver (which sets it to match its own broker) and the top-level
+// docker-compose.yml (NATS on 4223) stay in sync without hand-editing this
+// file. Default keeps the historical 4222 for standalone Node experiments.
+const transporter = process.env.NATS_URL || "nats://localhost:4222";
+
 // Create broker
 const broker = new ServiceBroker({
     nodeID: "node-integration-test",
-    transporter: "nats://localhost:4222",
+    transporter: transporter,
     logger: {
         type: "Console",
         options: {
@@ -23,6 +29,7 @@ const broker = new ServiceBroker({
 // Load services
 broker.loadService(__dirname + "/math.service.js");
 broker.loadService(__dirname + "/greeter.service.js");
+broker.loadService(__dirname + "/crosslang_test.service.js");
 
 // Start broker
 broker.start()

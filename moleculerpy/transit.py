@@ -146,6 +146,11 @@ class Transit:
         # Guard against repeated broker.stop() on NodeID conflict
         self._shutting_down: bool = False
 
+    @property
+    def is_connected(self) -> bool:
+        """Public API: True if transit has ever successfully connected."""
+        return self._was_connected
+
     def _emit_transporter_event(self, event: str, payload: dict[str, Any]) -> None:
         """Emit a transporter internal event via broker (fire-and-forget).
 
@@ -493,12 +498,9 @@ class Transit:
     async def beat(self) -> None:
         """Send a heartbeat with current node metrics.
 
-        Moleculer.js compatible:
-        - cpu: CPU usage percentage (0-100, int)
-        - cpuSeq: Sequence number that increments when CPU changes
-
-        Python extensions:
-        - memory: Memory usage percentage
+        Node.js compatible payload: {cpu} only.
+        Local node state (cpu, cpuSeq, memory, lastHeartbeatTime) is still
+        updated for local metrics/discovery, but not transmitted on the wire.
         """
         # Collect metrics using MetricsCollector (handles cpuSeq tracking)
         metrics = await self._metrics_collector.collect()
@@ -519,16 +521,8 @@ class Transit:
                 local_node.hostname = static["hostname"]
                 local_node.ipList = static["ip_list"]
 
-        heartbeat_data: dict[str, Any] = {
-            "cpu": metrics["cpu"],
-            "cpuSeq": metrics["cpuSeq"],
-            "memory": metrics["memory"],  # Python extension
-        }
-        # Include seq and instanceID so remote nodes can detect service changes
-        # and restarts via heartbeat (Node.js checks these in heartbeatReceived).
-        if local_node:
-            heartbeat_data["seq"] = local_node.seq
-            heartbeat_data["instanceID"] = local_node.instanceID
+        # Node.js compatible: heartbeat payload contains only {cpu}.
+        heartbeat_data: dict[str, Any] = {"cpu": metrics["cpu"]}
         await self.publish(Packet(Topic.HEARTBEAT, None, heartbeat_data))
 
     async def send_node_info(self) -> None:
@@ -539,6 +533,24 @@ class Transit:
 
         node_info = self.node_catalog.local_node.get_info()
         await self.publish(Packet(Topic.INFO, None, node_info))
+
+    async def send_disconnect_info(self) -> None:
+        """Broadcast INFO packet with empty services list to drain connections.
+
+        Sent BEFORE DISCONNECT during graceful shutdown so peer nodes mark this
+        node as draining and stop routing new requests to it. Matches Node.js
+        Moleculer service-broker.js stop() pattern.
+        """
+        if not self._was_connected:
+            return
+        if self.node_catalog.local_node is None:
+            return
+        try:
+            info = self.node_catalog.local_node.get_info()
+            drain_info = {**info, "services": []}
+            await self.publish(Packet(Topic.INFO, None, drain_info))
+        except Exception as e:
+            self.logger.warning(f"Error sending disconnect INFO drain: {e}")
 
     async def _handle_discover(self, packet: Packet) -> None:
         """Handle discovery requests by sending node info.
@@ -740,7 +752,10 @@ class Transit:
 
         endpoint = self.registry.get_event(event_name)
         if endpoint and endpoint.is_local and (endpoint.wrapped_handler or endpoint.handler):
-            context = self.lifecycle.rebuild_context(packet.payload)
+            # EVENT packets carry user data under "data" (Node.js parity), not
+            # "params". Delegate to the event-specific rebuild so REQUEST
+            # handling keeps its own schema untouched.
+            context = self.lifecycle.rebuild_event_context(packet.payload)
             success = True
             error_msg: str | None = None
 
@@ -1206,29 +1221,62 @@ class Transit:
         context: "Context",
         marshalled_context: dict[str, Any] | None = None,
         groups: list[str] | None = None,
+        broadcast: bool = False,
     ) -> None:
         """Send an event to a remote service.
 
-        When disable_balancer=True and groups are provided, the event is
+        Builds an EVENT-specific wire payload that matches the Node.js
+        ``Transit#sendEvent`` schema exactly (see ``moleculer/src/transit.js``).
+        Key differences from the generic ``Context.marshall()`` output:
+
+        - field is ``data`` (not ``params``) — Node.js handlers read ``ctx.data``
+        - explicit ``broadcast`` flag so receivers can dispatch to emit vs
+          broadcast event paths
+        - ``groups``, ``needAck``, ``caller`` included per protocol v4
+
+        When ``disable_balancer=True`` and groups are provided, the event is
         routed through prepublish with target=None so the transporter's
         built-in balancer distributes it across groups.
 
         Args:
             endpoint: Event endpoint to send to
             context: Event context
-            marshalled_context: Optional pre-marshalled context payload
+            marshalled_context: Optional pre-marshalled context (legacy; used
+                only to source meta/tracing when provided)
             groups: Optional list of consumer groups for balanced delivery
+            broadcast: True when called from ``_broadcast_core``; False from
+                ``_emit_core``. Stored on the wire as ``broadcast`` so remote
+                receivers can honour Node.js emit/broadcast semantics.
         """
-        payload = marshalled_context if marshalled_context is not None else context.marshall()
+        # EVENT-specific wire payload — matches Node.js transit.js#sendEvent.
+        # We build this explicitly rather than reusing context.marshall() so
+        # field naming stays stable per packet type. In particular, the event
+        # data field is "data" (Node.js), NOT "params" (which is REQUEST
+        # schema).
+        source = marshalled_context if marshalled_context is not None else None
+        payload: dict[str, Any] = {
+            "id": context.id,
+            "event": context.event,
+            "data": context.params,
+            "groups": list(groups) if groups else None,
+            "broadcast": bool(broadcast),
+            "meta": source.get("meta") if source is not None else context.meta,
+            "level": source.get("level") if source is not None else context.level,
+            "tracing": source.get("tracing") if source is not None else context.tracing,
+            "parentID": (source.get("parentID") if source is not None else context.parent_id),
+            "requestID": (source.get("requestID") if source is not None else context.request_id),
+            "caller": source.get("caller") if source is not None else context.caller,
+            "needAck": (source.get("needAck") if source is not None else context.need_ack),
+        }
 
-        # Balanced event path: target=None + groups in payload
+        # Balanced event path: target=None so transporter's built-in balancer
+        # (NATS queue groups, etc.) distributes across consumer groups.
         if (
             self._broker
             and self._broker.settings.disable_balancer
             and self.transporter.has_built_in_balancer
             and groups
         ):
-            payload["groups"] = groups
             packet = Packet(Topic.EVENT, None, payload)
             await self.prepublish(packet)
             return
@@ -1449,9 +1497,18 @@ class Transit:
             ack_timeout = getattr(self.settings, "ack_timeout", DEFAULT_ACK_TIMEOUT)
 
         try:
-            # Send the event
+            # Send the event through the shared send_event path so the wire
+            # payload matches the Node.js transit.js#sendEvent schema exactly
+            # (field "data", broadcast flag, groups, caller, needAck, etc.).
+            # Previously this method called Packet(..., context.marshall())
+            # directly, which placed the user payload under the legacy
+            # "params" key — completely bypassing the KNOWN-ISSUES #18 fix
+            # for the reliable-event (need_ack) code path. Node.js consumers
+            # read ctx.data, so the ACK path was silently broken for
+            # cross-language reliable event delivery until audit caught it
+            # pre-0.14.22 release.
             self.logger.debug("Sending event %s with ACK (id=%s)", context.event, ack_id)
-            await self.publish(Packet(Topic.EVENT, endpoint.node_id, context.marshall()))
+            await self.send_event(endpoint, context, broadcast=False)
 
             # Wait for ACK
             response = await asyncio.wait_for(future, ack_timeout)

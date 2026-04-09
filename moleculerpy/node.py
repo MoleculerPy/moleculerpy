@@ -12,6 +12,8 @@ Internal events emitted (Moleculer.js compatible):
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import sys
 import time
 from collections.abc import Coroutine
@@ -23,6 +25,150 @@ if TYPE_CHECKING:
 
 from .domain_types import NodeID
 from .registry import Action, Event
+
+_module_logger = logging.getLogger(__name__)
+
+
+def _is_wire_scalar(value: Any) -> bool:
+    """True iff ``value`` is a leaf that every supported wire serializer
+    (JSON / MsgPack / CBOR / ProtoBuf) will happily encode.
+
+    ``json.dumps`` alone is not enough because it has two quirks that downstream
+    binary serializers reject:
+
+    * ``allow_nan`` defaults to ``True``, so ``float('nan')`` / ``inf`` slip
+      through as the literal strings ``'NaN'`` / ``'Infinity'`` — which are
+      not valid JSON per RFC 8259 §6 and which MsgPack's ``msgpack.packb``
+      rejects with ``PackException``. On the wire this crashes the INFO
+      packet mid-handshake on any non-JSON transporter.
+    * It accepts non-str dict keys (via ``sort_keys``), which CBOR does
+      preserve but which breaks interop with strictly-keyed consumers.
+
+    We probe with ``allow_nan=False`` to reject IEEE 754 edge cases upfront.
+    """
+    try:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _sanitize_wire_value(value: Any) -> tuple[Any, bool]:
+    """Recursively strip non-serialisable leaves from ``value``.
+
+    Returns ``(cleaned, dropped_anything)``. ``cleaned`` preserves the shape of
+    the input (dict stays dict, list stays list) but replaces / removes any
+    leaf that fails the wire-scalar probe. Unlike a naive top-level filter
+    this keeps the valid siblings of a bad leaf — e.g. a ``routes`` list
+    containing ``{"path": "/api", "hook": <callable>}`` becomes
+    ``[{"path": "/api"}]`` rather than being dropped wholesale. That matters
+    for ``ApiGatewayService.settings`` where the whole point of shipping
+    ``routes`` to other nodes is so they can see route *structure* even if
+    they cannot execute the hooks.
+
+    ``dropped_anything`` is ``True`` when at least one value was stripped or
+    a leaf failed the probe, so the caller can decide whether to emit a
+    WARNING. We do not enumerate dropped *paths* to keep the helper cheap on
+    hot paths; the caller gets a single boolean signal plus the top-level
+    names of keys whose subtree changed.
+    """
+    if isinstance(value, dict):
+        cleaned_dict: dict[Any, Any] = {}
+        dropped = False
+        for k, v in value.items():
+            # Dict keys must themselves be wire-scalars (JSON only accepts
+            # str keys, but we tolerate ints by stringifying downstream).
+            if not isinstance(k, (str, int, float, bool)) or isinstance(k, bool):
+                # Unlikely in real configs, but defensive — drop the entry.
+                dropped = True
+                continue
+            cleaned_v, sub_dropped = _sanitize_wire_value(v)
+            if cleaned_v is _DROPPED:
+                dropped = True
+                continue
+            cleaned_dict[k] = cleaned_v
+            dropped = dropped or sub_dropped
+        return cleaned_dict, dropped
+    if isinstance(value, (list, tuple)):
+        cleaned_list: list[Any] = []
+        dropped = False
+        for item in value:
+            cleaned_item, sub_dropped = _sanitize_wire_value(item)
+            if cleaned_item is _DROPPED:
+                dropped = True
+                continue
+            cleaned_list.append(cleaned_item)
+            dropped = dropped or sub_dropped
+        return cleaned_list, dropped
+    if _is_wire_scalar(value):
+        return value, False
+    return _DROPPED, True
+
+
+# Sentinel used by _sanitize_wire_value to signal "drop this value entirely"
+# without confusing it with a legitimate ``None``.
+_DROPPED: Any = object()
+
+
+def _serializable_settings(
+    settings: Any,
+    *,
+    service_name: str | None = None,
+) -> dict[str, Any]:
+    """Return a deep-cleaned copy of ``settings`` safe for the wire.
+
+    Service settings (e.g. ``ApiGatewayService``) may contain callables such as
+    route hooks (``onBeforeCall``, ``authorization``) or other non-serialisable
+    objects nested inside lists / dicts. Including those verbatim in the INFO
+    packet crashes or hangs the wire serializer (json/msgpack/cbor).
+
+    The helper walks the tree recursively: each leaf is probed via
+    ``json.dumps(value, allow_nan=False)`` (strict JSON, rejects NaN/inf so
+    the binary serializers downstream don't crash) and non-scalar leaves are
+    dropped while their valid siblings are preserved. Nested dicts and lists
+    retain their shape — e.g. a ``routes`` list with one bad element keeps
+    its other elements, only stripping the offending leaf.
+
+    Dropped entries are signalled by a single WARNING log naming the
+    top-level setting keys whose subtree was rewritten. This is not a full
+    path list (would be expensive) but is enough for an operator to know
+    which part of the config lost data.
+
+    Args:
+        settings: Raw service settings value. Must be a dict at the top
+            level (anything else returns ``{}``).
+        service_name: Optional service full name used to annotate warnings
+            so operators can correlate dropped keys with a specific service.
+
+    Returns:
+        A new dict with non-serialisable leaves stripped and all other
+        structure preserved. Empty dict if ``settings`` is not a dict.
+    """
+    if not isinstance(settings, dict):
+        return {}
+    result: dict[str, Any] = {}
+    keys_with_changes: list[str] = []
+    for key, value in settings.items():
+        cleaned, sub_dropped = _sanitize_wire_value(value)
+        if cleaned is _DROPPED:
+            keys_with_changes.append(str(key))
+            continue
+        if sub_dropped:
+            keys_with_changes.append(str(key))
+        result[key] = cleaned
+    if keys_with_changes:
+        who = service_name or "<unknown service>"
+        _module_logger.warning(
+            "Stripped non-wire-safe leaves from service %s settings before "
+            "INFO broadcast (affected top-level keys: %s). Callables, open "
+            "files, NaN/inf and other non-JSON-serialisable leaves are "
+            "local-only and will not be visible on other nodes. If peer "
+            "services require these values they must be passed through "
+            "action params or metadata instead.",
+            who,
+            ", ".join(keys_with_changes),
+        )
+    return result
 
 
 def _suppress_task_exception(task: asyncio.Task[Any]) -> None:
@@ -477,7 +623,7 @@ class NodeCatalog:
                 "name": service.name,
                 "version": getattr(service, "version", None),
                 "fullName": svc_full_name,
-                "settings": service.settings,
+                "settings": _serializable_settings(service.settings, service_name=svc_full_name),
                 "metadata": service.metadata,
                 "actions": {},
                 "events": {},

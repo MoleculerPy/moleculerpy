@@ -197,6 +197,28 @@ class TestProtoBufSerializer:
         result = serializer.deserialize(data, packet_type="HEARTBEAT")
         assert result["cpu"] == 75
 
+    def test_heartbeat_extra_fields_dropped_for_nodejs_parity(
+        self, serializer: ProtoBufSerializer
+    ) -> None:
+        # PacketHeartbeat wire format matches Node.js exactly: only ver/sender/cpu.
+        # Field numbers 4-7 are reserved (formerly seq/instanceID/memory/cpuSeq).
+        # Extra keys in payload must be silently dropped during serialization.
+        payload = {
+            "ver": "4",
+            "sender": "node-1",
+            "cpu": 50.5,
+            "seq": 42,
+            "instanceID": "abc-123-instance",
+            "memory": 1024.75,
+            "cpuSeq": 7,
+        }
+        data = serializer.serialize(payload, packet_type="HEARTBEAT")
+        result = serializer.deserialize(data, packet_type="HEARTBEAT")
+        assert result["cpu"] == 50.5
+        assert result["sender"] == "node-1"
+        for dropped in ("seq", "instanceID", "memory", "cpuSeq"):
+            assert dropped not in result
+
     def test_roundtrip_ping_pong(self, serializer: ProtoBufSerializer) -> None:
         ping = {"ver": "4", "sender": "n1", "time": 1234567890, "id": "ping-1"}
         data = serializer.serialize(ping, packet_type="PING")

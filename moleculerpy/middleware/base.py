@@ -156,6 +156,27 @@ class Middleware:
         """
         pass
 
+    # ==========================================================================
+    # Node.js Moleculer-compatible short aliases for broker lifecycle hooks.
+    # The broker invokes BOTH the long-form (broker_*) and the short alias name
+    # so middleware authored against the Node.js naming convention works as-is.
+    # Note: "stopped" is intentionally NOT aliased because MoleculerPy's existing
+    # stopped() hook (below) takes no arguments and is reserved for middleware
+    # self-cleanup. Use broker_stopped() if you need a broker reference.
+    # ==========================================================================
+
+    async def starting(self, broker: Any) -> None:
+        """Node.js-compatible alias for broker_starting. Called BEFORE connect."""
+        pass
+
+    async def started(self, broker: Any) -> None:
+        """Node.js-compatible alias for broker_started. Called AFTER connect."""
+        pass
+
+    async def stopping(self, broker: Any) -> None:
+        """Node.js-compatible alias for broker_stopping. Called BEFORE disconnect."""
+        pass
+
     async def service_creating(self, service: Any) -> None:
         """
         Hook called asynchronously BEFORE a service is registered.

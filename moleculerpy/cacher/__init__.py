@@ -40,7 +40,22 @@ from .base import (
 )
 from .memory import MemoryCacher
 from .memory_lru import MemoryLRUCacher
-from .redis import RedisCacher
+
+# RedisCacher is optional: the ``redis`` package is only declared in the
+# ``test`` extra, so a plain ``pip install moleculerpy`` leaves it
+# uninstalled. Prior to 0.14.22 this import was unconditional, which
+# made simply constructing a ``ServiceBroker`` crash with
+# ``ModuleNotFoundError: No module named 'redis'`` on any base install.
+# Fall back to a stub when the dependency is missing, and skip the
+# registry entry so ``resolve("redis")`` still fails loudly with an
+# informative "Unknown cacher type" error.
+try:
+    from .redis import RedisCacher
+
+    _HAS_REDIS_CACHER = True
+except ImportError:
+    _HAS_REDIS_CACHER = False
+    RedisCacher = None  # type: ignore[assignment,misc]
 
 if TYPE_CHECKING:
     pass
@@ -51,9 +66,10 @@ _CACHER_REGISTRY: dict[str, type[BaseCacher]] = {
     "Memory": MemoryCacher,
     "MemoryLRU": MemoryLRUCacher,
     "memory-lru": MemoryLRUCacher,
-    "redis": RedisCacher,
-    "Redis": RedisCacher,
 }
+if _HAS_REDIS_CACHER:
+    _CACHER_REGISTRY["redis"] = RedisCacher
+    _CACHER_REGISTRY["Redis"] = RedisCacher
 
 
 def register(name: str, cacher_class: type[BaseCacher]) -> None:
