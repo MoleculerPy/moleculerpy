@@ -1497,9 +1497,18 @@ class Transit:
             ack_timeout = getattr(self.settings, "ack_timeout", DEFAULT_ACK_TIMEOUT)
 
         try:
-            # Send the event
+            # Send the event through the shared send_event path so the wire
+            # payload matches the Node.js transit.js#sendEvent schema exactly
+            # (field "data", broadcast flag, groups, caller, needAck, etc.).
+            # Previously this method called Packet(..., context.marshall())
+            # directly, which placed the user payload under the legacy
+            # "params" key — completely bypassing the KNOWN-ISSUES #18 fix
+            # for the reliable-event (need_ack) code path. Node.js consumers
+            # read ctx.data, so the ACK path was silently broken for
+            # cross-language reliable event delivery until audit caught it
+            # pre-0.14.22 release.
             self.logger.debug("Sending event %s with ACK (id=%s)", context.event, ack_id)
-            await self.publish(Packet(Topic.EVENT, endpoint.node_id, context.marshall()))
+            await self.send_event(endpoint, context, broadcast=False)
 
             # Wait for ACK
             response = await asyncio.wait_for(future, ack_timeout)

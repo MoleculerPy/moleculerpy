@@ -259,6 +259,11 @@ def test_bug17_service_settings_with_callables_are_stripped() -> None:
     assert "onBeforeCall" not in cleaned
     assert "authorization" not in cleaned
     assert "path_obj" not in cleaned
+    # Exact key set — guards against a regression that would over-zealously
+    # drop safe sibling keys while stripping the callables. Without this,
+    # a bug that dropped EVERY dict key would still pass the weaker
+    # "unsafe keys gone" assertions above.
+    assert set(cleaned.keys()) == {"port", "host", "routes"}
     # Result round-trips through json without raising — this is the exact
     # contract the transit/transporter serializers rely on.
     json.dumps(cleaned)
@@ -271,6 +276,187 @@ def test_bug17_non_dict_settings_return_empty_dict() -> None:
     assert _serializable_settings(None) == {}
     assert _serializable_settings("string") == {}
     assert _serializable_settings(123) == {}
+
+
+def test_bug17_rejects_nan_and_inf_for_binary_serializer_safety() -> None:
+    """Regression for a wire-audit HIGH finding.
+
+    ``json.dumps`` defaults to ``allow_nan=True`` and happily encodes
+    ``float('nan')`` as the literal string ``'NaN'`` — which is NOT valid
+    JSON per RFC 8259 §6 and which ``msgpack.packb`` rejects outright. A
+    naive ``json.dumps`` probe that permits NaN/inf would pass those
+    values through and crash the INFO packet mid-handshake on NATS with
+    MsgPack. ``_serializable_settings`` explicitly uses ``allow_nan=False``
+    so the probe rejects these IEEE 754 edge cases and they are stripped.
+    """
+    import json
+
+    from moleculerpy.node import _serializable_settings
+
+    raw = {
+        "clean_int": 1,
+        "nan_value": float("nan"),
+        "pos_inf": float("inf"),
+        "neg_inf": float("-inf"),
+    }
+    cleaned = _serializable_settings(raw, service_name="nan-probe")
+
+    # Clean scalar survives.
+    assert cleaned["clean_int"] == 1
+    # NaN/inf are stripped (would otherwise poison the wire).
+    assert "nan_value" not in cleaned
+    assert "pos_inf" not in cleaned
+    assert "neg_inf" not in cleaned
+    # Strict-JSON round-trip: this is the contract downstream consumers
+    # (msgpack / cbor / strict JSON parsers) rely on.
+    json.dumps(cleaned, allow_nan=False)
+
+
+def test_bug17_recursive_sanitisation_preserves_siblings() -> None:
+    """Regression for a wire-audit HIGH finding.
+
+    Real-world ``ApiGatewayService.settings`` looks like::
+
+        {
+            "routes": [
+                {"path": "/api", "aliases": {...}, "onBeforeCall": callable},
+            ],
+        }
+
+    A naive top-level-only filter would probe the whole ``routes`` value,
+    find the callable nested inside, and drop the entire ``routes`` list —
+    losing the valid ``path`` / ``aliases`` structure too. That defeats
+    the whole point of shipping settings over the wire (remote nodes want
+    to SEE the route structure even if they cannot execute the hooks).
+
+    The recursive sanitiser keeps non-serialisable leaves out but preserves
+    their siblings all the way down.
+    """
+    from moleculerpy.node import _serializable_settings
+
+    raw = {
+        "port": 3000,
+        "routes": [
+            {
+                "path": "/api",
+                "method": "GET",
+                "onBeforeCall": lambda req: None,  # dropped
+                "aliases": {
+                    "GET /users": "users.list",
+                    "auth": lambda tok: None,  # dropped
+                },
+            },
+            {
+                "path": "/health",
+                # No callables at all — this entry should survive intact.
+            },
+        ],
+    }
+    cleaned = _serializable_settings(raw, service_name="gateway-probe")
+
+    assert cleaned["port"] == 3000
+    assert "routes" in cleaned
+    assert len(cleaned["routes"]) == 2
+    first = cleaned["routes"][0]
+    assert first["path"] == "/api"
+    assert first["method"] == "GET"
+    assert "onBeforeCall" not in first
+    assert first["aliases"]["GET /users"] == "users.list"
+    assert "auth" not in first["aliases"]
+    assert cleaned["routes"][1] == {"path": "/health"}
+
+
+def test_bug17_send_event_with_ack_uses_data_field() -> None:
+    """Regression for wire-audit CRITICAL finding.
+
+    ``Transit.send_event_with_ack`` used to call
+    ``self.publish(Packet(Topic.EVENT, ..., context.marshall()))`` directly,
+    bypassing the EVENT wire schema fix entirely — the payload landed on
+    the wire under the legacy ``params`` key instead of ``data``. The
+    reliable-event (needAck) path was silently broken for cross-language
+    consumers even after KNOWN-ISSUES #18 was closed on the normal
+    ``send_event`` path. The fix delegates to ``send_event`` so all code
+    paths share the same wire construction.
+
+    This is a signature probe rather than a full wire test: it asserts
+    the method body delegates through ``send_event``, which
+    ``test_bug18_send_event_builds_node_js_wire_schema`` already proves
+    produces the correct wire shape.
+    """
+    import asyncio
+    import inspect
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from moleculerpy.transit import Transit
+
+    # Static probe: the method MUST delegate to self.send_event(). A
+    # regression would pull the publish back into this method body and
+    # break the wire shape for the ACK path. (We intentionally don't
+    # assert that "context.marshall()" is absent from the source because
+    # the docstring mentions it as historical context.)
+    source = inspect.getsource(Transit.send_event_with_ack)
+    assert "self.send_event(" in source, (
+        "send_event_with_ack does not delegate to send_event — wire schema fix likely regressed"
+    )
+
+    # Functional probe: construct a Transit with the event_ack_test
+    # fixture pattern and verify send_event_with_ack routes through
+    # send_event without crashing on the missing broker setup.
+    async def run() -> None:
+        mock_transporter = MagicMock()
+        mock_transporter.connect = AsyncMock()
+        mock_transporter.publish = AsyncMock()
+        mock_transporter.has_built_in_balancer = False
+
+        settings = MagicMock()
+        settings.transporter = "memory"
+        settings.serializer = "JSON"
+        settings.disable_balancer = False
+        settings.ack_timeout = 0.1
+
+        with patch("moleculerpy.transit.Transporter.get_by_name", return_value=mock_transporter):
+            transit = Transit(
+                node_id="t-ack",
+                registry=MagicMock(),
+                node_catalog=MagicMock(),
+                settings=settings,
+                logger=MagicMock(),
+                lifecycle=MagicMock(),
+            )
+
+            endpoint = MagicMock()
+            endpoint.node_id = "peer"
+
+            ctx = MagicMock()
+            ctx.id = "evt-1"
+            ctx.event = "user.created"
+            ctx.params = {"id": 1}
+            ctx.meta = {}
+            ctx.level = 1
+            ctx.tracing = None
+            ctx.parent_id = None
+            ctx.request_id = "req-1"
+            ctx.caller = None
+            ctx.need_ack = None
+            ctx.ack_id = None
+
+            # We expect a timeout waiting for ACK (no receiver) — swallow
+            # it; the publish call is the thing we care about.
+            try:
+                await transit.send_event_with_ack(endpoint, ctx, timeout=0.1)
+            except TimeoutError:
+                pass
+
+        # The prepublish path ends at transporter.publish; pull the packet
+        # and assert the payload is built with the EVENT wire schema, not
+        # context.marshall()'s "params" schema.
+        mock_transporter.publish.assert_called_once()
+        packet = mock_transporter.publish.call_args[0][0]
+        assert packet.payload["data"] == {"id": 1}
+        assert "params" not in packet.payload
+        assert packet.payload["needAck"] is True
+
+    asyncio.run(run())
 
 
 # ---------------------------------------------------------------------------
